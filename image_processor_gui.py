@@ -4,6 +4,10 @@ from PIL import Image, ImageTk
 import os
 import tkinterdnd2
 import numpy as np
+import threading
+import tkinter as tk
+
+SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 
 class ImageProcessorFrame(ctk.CTkFrame):
     def __init__(self, master, lang_manager):
@@ -12,6 +16,8 @@ class ImageProcessorFrame(ctk.CTkFrame):
         self.current_image_path = None
         self.original_image = None
         self.processed_image = None
+        self.selected_folder = None
+        self.is_running = False
         self.image_tk = None
 
         self.grid_columnconfigure(0, weight=1)
@@ -22,15 +28,35 @@ class ImageProcessorFrame(ctk.CTkFrame):
         self.file_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.file_frame.grid_columnconfigure(0, weight=1)
 
+
         self.file_label = ctk.CTkLabel(self.file_frame, text=self.lang_manager.get_text('select_image_file'))
         self.file_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
         self.select_button = ctk.CTkButton(self.file_frame, text=self.lang_manager.get_text('browse'), command=self.select_image)
         self.select_button.grid(row=0, column=1, padx=5, pady=5)
 
+        # 选择文件夹
+        self.folder_frame = ctk.CTkFrame(self)
+        self.folder_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.folder_frame.grid_columnconfigure(0, weight=1)
+
+        self.folder_label = ctk.CTkLabel(self.file_frame, text=self.lang_manager.get_text('select_folder'))
+        self.folder_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+
+        self.folder_path_label = ctk.CTkLabel(self.file_frame, text=self.lang_manager.get_text('no_image_selected'), text_color="gray")
+        self.folder_path_label.grid(row=1, column=2, columnspan=2, padx=5, pady=5, sticky="w")
+
+        self.select_folder_button = ctk.CTkButton(self.file_frame, text=self.lang_manager.get_text('browse'), command=self.select_folder)
+        self.select_folder_button.grid(row=2, column=1, padx=5, pady=5)
+
+        # Use CTkTextbox for log area
+        self.log_area = ctk.CTkTextbox(self, wrap=tk.WORD, height=200) # Adjusted height
+        self.log_area.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
+        self.log_area.configure(state='disabled')
+
         # --- Image Display Area ---
         self.image_display_frame = ctk.CTkFrame(self)
-        self.image_display_frame.grid(row=1, column=0, padx=10, pady=0, sticky="nsew")
+        self.image_display_frame.grid(row=2, column=0, padx=10, pady=0, sticky="nsew")
         self.image_display_frame.grid_columnconfigure(0, weight=1)
         self.image_display_frame.grid_rowconfigure(0, weight=1)
 
@@ -39,7 +65,7 @@ class ImageProcessorFrame(ctk.CTkFrame):
 
         # --- Controls Frame ---
         self.controls_frame = ctk.CTkFrame(self)
-        self.controls_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
+        self.controls_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
         self.controls_frame.grid_columnconfigure((0, 1, 2, 3, 4, 5), weight=1) # Adjusted columns after removing crop
 
         self.flip_horizontal_button = ctk.CTkButton(self.controls_frame, text=self.lang_manager.get_text('flip_horizontal'), command=self.flip_horizontal)
@@ -79,6 +105,119 @@ class ImageProcessorFrame(ctk.CTkFrame):
         self.rotate_right_button.configure(text=self.lang_manager.get_text('rotate_right'))
         self.resize_button.configure(text=self.lang_manager.get_text('resize_image'))
         self.save_button.configure(text=self.lang_manager.get_text('save_image'))
+
+    def select_folder(self):
+        if self.is_running:
+            messagebox.showwarning(self.lang_manager.get_text('title'), self.lang_manager.get_text('task_running'))
+            return
+        folder = filedialog.askdirectory()
+        if folder:
+            self.selected_folder = folder
+            foldername = os.path.basename(self.selected_folder)
+            self.folder_path_label.configure(text=foldername, text_color="white")
+
+    def start_flip_thread(self, direct):
+            if self.is_running:
+                messagebox.showwarning(self.lang_manager.get_text('title'), self.lang_manager.get_text('task_running'))
+                return
+
+            root_dir = self.selected_folder
+            if not root_dir:
+                messagebox.showerror(self.lang_manager.get_text('title'), self.lang_manager.get_text('select_folder_error'))
+                return
+            if not os.path.isdir(root_dir):
+                messagebox.showerror(self.lang_manager.get_text('title'), self.lang_manager.get_text('invalid_folder_error'))
+                return
+
+            if not messagebox.askyesno(self.lang_manager.get_text('title'),
+                                    self.lang_manager.get_text('confirm_operation').format(folder=os.path.basename(root_dir))):
+                return
+
+            # 将其他功能按钮状态设置为不可用
+            # self.log_area.configure(state='normal')
+            # self.log_area.delete('1.0', tk.END)
+            # self.log_area.configure(state='disabled')
+            # self.rename_button.configure(state='disabled', text=self.lang_manager.get_text('processing'))
+            # self.browse_button.configure(state='disabled')
+            self.is_running = True
+
+            #  开始线程任务
+            self.flip_thread = threading.Thread(target=self.run_flip_task, args=(root_dir, direct))
+            self.flip_thread.daemon = True
+            self.flip_thread.start()
+
+    def run_flip_task(self, root_dir, direct):
+        try:
+            # Pass self.lang_manager to the recursive function
+            self.flip_images_recursively(root_dir, direct, self.log, self.lang_manager)
+        except Exception as e:
+            self.log(self.lang_manager.get_text('unexpected_error').format(error=str(e)))
+        finally:
+            self.master.after(0, self.on_flip_complete)
+
+    def on_flip_complete(self):
+        messagebox.showinfo(self.lang_manager.get_text('title'), self.lang_manager.get_text('completed'))
+        self.is_running = False
+        self.select_folder = None
+        self.folder_path_label.configure(text=None, text_color="white")
+
+    def flip_images_recursively(self, root_dir, direct, log_callback, lang_manager): # Add lang_manager
+        total_flip = 0
+        if not os.path.isdir(root_dir):
+            log_callback(lang_manager.get_text('invalid_folder_error')) # Use passed lang_manager
+            return 0
+
+        log_callback(lang_manager.get_text('recursive_start').format(root_dir=root_dir)) # Use passed lang_manager
+
+        for dirpath, dirnames, filenames in os.walk(root_dir, topdown=True):
+            # Pass lang_manager to the inner function
+            flip_in_folder = self.flip_images_in_folder(dirpath, direct, log_callback, lang_manager)
+            total_flip += flip_in_folder
+
+        log_callback(lang_manager.get_text('recursive_complete').format(total_flip=total_flip)) # Use passed lang_manager
+        return total_flip
+
+    def flip_images_in_folder(self, folder_path, direct, log_callback, lang_manager): # Add lang_manager
+        try:
+            folder_name = os.path.basename(folder_path)
+            if not folder_name:
+                log_callback(lang_manager.get_text('skip_root').format(folder_path=folder_path)) # Use passed lang_manager
+                return 0
+
+            count = 1
+            flip_count = 0
+            log_callback(lang_manager.get_text('start_processing').format(folder_path=folder_path))
+
+            items = sorted(os.listdir(folder_path))
+
+            for filename in items:
+                original_full_path = os.path.join(folder_path, filename)
+
+                if os.path.isfile(original_full_path):
+                    _, ext = os.path.splitext(filename)
+                    if ext.lower() in SUPPORTED_EXTENSIONS:
+                        originalImageCopy = Image.open(original_full_path).copy()
+                        flipImage = originalImageCopy.transpose(direct)
+                        flipExt = "flip_left_right" if direct == Image.FLIP_LEFT_RIGHT else "flip_top_bottom"
+                        self.save_flip_image(flipImage, original_full_path, flipExt)
+                        flip_count +=1
+
+            log_callback(lang_manager.get_text('folder_processed').format(folder_path=folder_path, flip_count=flip_count))
+            return flip_count
+
+        except Exception as e:
+            log_callback(lang_manager.get_text('unexpected_error').format(error=str(e))) # Use passed lang_manager
+            return 0
+
+    def log(self, message):
+            # Use CTkTextbox methods
+            def _update_log():
+                self.log_area.configure(state='normal')
+                self.log_area.insert(tk.END, message + "\n")
+                self.log_area.see(tk.END)
+                self.log_area.configure(state='disabled')
+            # Use self.after for scheduling within the frame
+            self.after(0, _update_log)
 
     def select_image(self):
         file_path = filedialog.askopenfilename(
@@ -155,11 +294,20 @@ class ImageProcessorFrame(ctk.CTkFrame):
         if self.processed_image:
             self.processed_image = self.processed_image.transpose(Image.FLIP_LEFT_RIGHT)
             self.display_image()
+        
+        # 如果文件夹存在
+        if self.selected_folder:
+            # 批量将图片翻转并自动保存
+            self.start_flip_thread(Image.FLIP_LEFT_RIGHT)
 
     def flip_vertical(self):
         if self.processed_image:
             self.processed_image = self.processed_image.transpose(Image.FLIP_TOP_BOTTOM)
             self.display_image()
+        # 如果文件夹存在
+        if self.selected_folder:
+            # 批量将图片翻转并自动保存
+            self.start_flip_thread(Image.FLIP_TOP_BOTTOM)
 
     def color_to_transparent(self):
         if self.processed_image:
@@ -259,6 +407,56 @@ class ImageProcessorFrame(ctk.CTkFrame):
 
                     img_to_save.save(file_path)
                     print(f"Image saved successfully to {file_path}")
+                    # Optionally show a success message
+                except Exception as e:
+                    print(f"Error saving image: {e}")
+                    # Optionally show an error message
+
+    def save_flip_image(self, image, image_path, flip_direct):
+        if image and image_path:
+            original_dir = os.path.dirname(image_path)
+            original_name, original_ext = os.path.splitext(os.path.basename(image_path))
+
+            # Suggest a new filename (e.g., original_name_processed.png)
+            suggested_name = f"{original_name}_{flip_direct}{original_ext}"
+            suggested_path = os.path.join(original_dir, suggested_name)
+
+            # 不需要手动确认
+            # file_path = filedialog.asksaveasfilename(
+            #     initialdir=original_dir,
+            #     initialfile=suggested_name,
+            #     defaultextension=original_ext,
+            #     filetypes=[(self.lang_manager.get_text('image_files'), "*.png *.jpg *.jpeg *.bmp *.gif")]
+            # )
+            file_path = suggested_path
+            if file_path:
+                try:
+                    # Ensure the image is in a format suitable for saving (e.g., convert RGBA to RGB if saving as JPG)
+                    if image.mode == 'RGBA' and (file_path.lower().endswith('.jpg') or file_path.lower().endswith('.jpeg')):
+                        # Create a white background image
+                        background = Image.new('RGB', image.size, (255, 255, 255))
+                        # Paste the RGBA image onto the background
+                        background.paste(image, mask=image.split()[3]) # 3 is the alpha channel
+                        img_to_save = background
+                    else:
+                        img_to_save = image
+
+                    file_extension = os.path.splitext(image_path)[1].lower()
+                    save_format = None
+                    if file_extension in ('.jpg', '.jpeg'):
+                        save_format = 'jpeg'
+                        # 如果是RGBA模式，转换为RGB，因为JPEG不支持透明度
+                        if resized_img.mode == 'RGBA':
+                            resized_img = resized_img.convert('RGB')
+                    elif file_extension == '.png':
+                        save_format = 'png'
+                    elif file_extension == '.bmp':
+                        save_format = 'bmp'
+                    elif file_extension == '.gif':
+                        save_format = 'gif'
+                    if save_format:
+                        img_to_save.save(file_path, format=save_format)
+                        print(f"Image saved successfully to {file_path}")
                     # Optionally show a success message
                 except Exception as e:
                     print(f"Error saving image: {e}")
