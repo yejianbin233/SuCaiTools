@@ -10,6 +10,8 @@ import requests
 import re
 from config_dialog import ConfigDialog
 from translator_manager import TranslatorManager
+import time
+from tkinter import messagebox
 
 class CaptionEditorFrame(ctk.CTkFrame):
     def __init__(self, master, lang_manager):
@@ -34,6 +36,10 @@ class CaptionEditorFrame(ctk.CTkFrame):
         
         # 加载配置
         self.load_config()
+        
+        # 批量翻译控制变量
+        self.batch_translate_running = False
+        self.batch_translate_stop_flag = False
         
         # 创建界面
         self.create_widgets()
@@ -163,7 +169,7 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.translate_service_var = ctk.StringVar(value=self.translator_config['current_service'])
         self.translate_service_menu = ctk.CTkOptionMenu(
             translate_frame,
-            values=['baidu', 'youdao', 'google', 'deepl', 'openai', 'qwen', 'deepseek'],
+            values=['tencent', 'baidu', 'youdao', 'google', 'deepl', 'openai', 'qwen', 'deepseek'],
             variable=self.translate_service_var,
             width=100,
             command=self.change_translate_service
@@ -214,6 +220,49 @@ class CaptionEditorFrame(ctk.CTkFrame):
         )
         self.config_btn.pack(side="left", padx=5)
         
+        # 批量翻译按钮
+        self.batch_translate_btn = ctk.CTkButton(
+            action_frame,
+            text="批量翻译",
+            width=100,
+            command=self.start_batch_translate,
+            fg_color="#2E7D32",  # 绿色
+            hover_color="#1B5E20"
+        )
+        self.batch_translate_btn.pack(side="left", padx=5)
+        
+        # 停止批量翻译按钮（初始隐藏）
+        self.stop_batch_btn = ctk.CTkButton(
+            action_frame,
+            text="停止",
+            width=80,
+            command=self.stop_batch_translate,
+            fg_color="#D32F2F",  # 红色
+            hover_color="#B71C1C"
+        )
+        self.stop_batch_btn.pack(side="left", padx=5)
+        self.stop_batch_btn.pack_forget()  # 初始隐藏
+        
+        # 批量翻译进度条
+        self.progress_frame = ctk.CTkFrame(button_frame)
+        self.progress_frame.pack(fill="x", pady=5)
+        self.progress_frame.pack_forget()  # 初始隐藏
+        
+        self.progress_label = ctk.CTkLabel(
+            self.progress_frame,
+            text="",
+            font=("Arial", 10)
+        )
+        self.progress_label.pack(side="left", padx=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(
+            self.progress_frame,
+            width=200,
+            height=10
+        )
+        self.progress_bar.pack(side="left", padx=5, fill="x", expand=True)
+        self.progress_bar.set(0)
+        
         # 状态栏
         self.status_label = ctk.CTkLabel(main_container, text="准备就绪")
         self.status_label.pack(fill="x", pady=(10, 0))
@@ -234,6 +283,8 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.save_btn.configure(text="保存修改")
         self.refresh_btn.configure(text="刷新")
         self.config_btn.configure(text="配置")
+        self.batch_translate_btn.configure(text="批量翻译")
+        self.stop_batch_btn.configure(text="停止")
         self.status_label.configure(text="准备就绪")
     
     def browse_folder(self):
@@ -269,10 +320,6 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.caption_pairs = []
         for img_path in all_image_paths:
             txt_path = img_path + '.txt'
-
-        for img_path in all_image_paths:
-            print(f"{img_path}")
-            print(f"{txt_path}")
             if os.path.exists(txt_path):
                 self.caption_pairs.append((img_path, txt_path))
         
@@ -322,9 +369,9 @@ class CaptionEditorFrame(ctk.CTkFrame):
         if chinese_caption:
             self.chinese_text.insert("1.0", chinese_caption)
         else:
-            # 如果没有中文翻译，尝试自动翻译
-            if english_caption:
-                self.translate_en_to_cn_async()
+            # 不自动翻译，只显示空文本框
+            # 用户需要手动点击翻译按钮
+            self.chinese_text.insert("1.0", "")
         
         # 更新索引显示
         self.index_label.configure(text=f"{self.current_index + 1}/{len(self.caption_pairs)}")
@@ -332,6 +379,13 @@ class CaptionEditorFrame(ctk.CTkFrame):
         # 更新按钮状态
         self.prev_btn.configure(state="normal" if self.current_index > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.current_index < len(self.caption_pairs) - 1 else "disabled")
+        
+        # 显示当前文件的中文翻译状态
+        chinese_path = os.path.splitext(txt_path)[0] + '_cn.txt'
+        if os.path.exists(chinese_path):
+            self.show_status(f"已加载: {os.path.basename(img_path)} (已有中文翻译)")
+        else:
+            self.show_status(f"已加载: {os.path.basename(img_path)} (无中文翻译)")
     
     def display_image(self, img_path):
         """在画布上显示图片"""
@@ -540,3 +594,176 @@ class CaptionEditorFrame(ctk.CTkFrame):
         """显示状态信息"""
         self.status_label.configure(text=message)
         print(f"状态: {message}")
+    
+    def start_batch_translate(self):
+        """开始批量翻译"""
+        if not self.caption_pairs:
+            self.show_status("错误：请先加载图片")
+            return
+        
+        # 检查是否需要用户确认
+        if not messagebox.askyesno("批量翻译", f"确定要批量翻译 {len(self.caption_pairs)} 个文件吗？"):
+            return
+        
+        # 禁用批量翻译按钮，显示停止按钮
+        self.batch_translate_btn.configure(state="disabled")
+        self.stop_batch_btn.pack(side="left", padx=5)
+        
+        # 显示进度条
+        self.progress_frame.pack(fill="x", pady=5)
+        
+        # 启动批量翻译线程
+        self.batch_translate_running = True
+        self.batch_translate_stop_flag = False
+        
+        thread = threading.Thread(target=self.batch_translate_process, daemon=True)
+        thread.start()
+    
+    def batch_translate_process(self):
+        """批量翻译处理函数"""
+        try:
+            total_files = len(self.caption_pairs)
+            translated_count = 0
+            skipped_count = 0
+            failed_count = 0
+            
+            # 创建翻译器
+            translator = TranslatorManager.get_translator(
+                self.translator_config['current_service'], 
+                self.translator_config
+            )
+            
+            for i, (img_path, txt_path) in enumerate(self.caption_pairs):
+                # 检查是否被停止
+                if self.batch_translate_stop_flag:
+                    self.after(0, lambda: self.show_status("批量翻译已停止"))
+                    break
+                
+                # 检查是否已有中文翻译
+                chinese_path = os.path.splitext(txt_path)[0] + '_cn.txt'
+                if os.path.exists(chinese_path):
+                    # 已有中文翻译，跳过
+                    skipped_count += 1
+                    self.after(0, lambda idx=i+1, total=total_files, img=img_path: 
+                              self.update_batch_progress(idx, total, f"跳过: {os.path.basename(img)}"))
+                    continue
+                
+                # 读取英文文本
+                try:
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        english_text = f.read().strip()
+                except:
+                    english_text = ""
+                
+                if not english_text:
+                    # 英文文本为空，跳过
+                    skipped_count += 1
+                    self.after(0, lambda idx=i+1, total=total_files, img=img_path: 
+                              self.update_batch_progress(idx, total, f"跳过(无英文): {os.path.basename(img)}"))
+                    continue
+                
+                # 更新进度
+                self.after(0, lambda idx=i+1, total=total_files, img=img_path: 
+                          self.update_batch_progress(idx, total, f"翻译中: {os.path.basename(img)}"))
+                
+                # 执行翻译
+                try:
+                    chinese_text = translator.translate_to_chinese(english_text)
+                    
+                    # 检查翻译结果是否有效
+                    if not chinese_text or "失败" in chinese_text or "错误" in chinese_text:
+                        failed_count += 1
+                        self.after(0, lambda idx=i+1, total=total_files, img=img_path: 
+                                  self.update_batch_progress(idx, total, f"翻译失败: {os.path.basename(img)}"))
+                        continue
+                    
+                    # 保存中文翻译
+                    with open(chinese_path, 'w', encoding='utf-8') as f:
+                        f.write(chinese_text)
+                    
+                    translated_count += 1
+                    
+                    # 更新进度
+                    self.after(0, lambda idx=i+1, total=total_files, img=img_path: 
+                              self.update_batch_progress(idx, total, f"完成: {os.path.basename(img)}"))
+                    
+                    # 如果是当前显示的文件，更新显示
+                    if i == self.current_index:
+                        self.after(0, lambda: self.update_chinese_text(chinese_text))
+                    
+                    # 为了避免API调用频率限制，添加延迟
+                    time.sleep(1)  # 1秒延迟
+                    
+                except Exception as e:
+                    failed_count += 1
+                    error_msg = str(e)[:50]
+                    self.after(0, lambda idx=i+1, total=total_files, img=img_path, err=error_msg: 
+                              self.update_batch_progress(idx, total, f"错误: {os.path.basename(img)} ({err})"))
+                    continue
+            
+            # 批量翻译完成
+            self.batch_translate_running = False
+            
+            # 更新UI
+            self.after(0, lambda: self.on_batch_translate_complete(
+                total_files, translated_count, skipped_count, failed_count
+            ))
+            
+        except Exception as e:
+            error_msg = str(e)
+            self.after(0, lambda: self.on_batch_translate_error(error_msg))
+    
+    def update_batch_progress(self, current, total, message):
+        """更新批量翻译进度"""
+        # 更新进度条
+        progress = current / total
+        self.progress_bar.set(progress)
+        
+        # 更新进度标签
+        self.progress_label.configure(text=f"{current}/{total} {message}")
+        
+        # 更新状态
+        self.show_status(f"批量翻译: {message}")
+    
+    def on_batch_translate_complete(self, total, translated, skipped, failed):
+        """批量翻译完成"""
+        # 隐藏进度条和停止按钮
+        self.progress_frame.pack_forget()
+        self.stop_batch_btn.pack_forget()
+        
+        # 启用批量翻译按钮
+        self.batch_translate_btn.configure(state="normal")
+        
+        # 显示结果
+        result_message = f"批量翻译完成！\n总共: {total} 个文件\n翻译: {translated} 个\n跳过: {skipped} 个\n失败: {failed} 个"
+        
+        if failed > 0:
+            messagebox.showwarning("批量翻译完成", result_message)
+        else:
+            messagebox.showinfo("批量翻译完成", result_message)
+        
+        self.show_status("批量翻译完成")
+        
+        # 刷新当前显示
+        if self.caption_pairs:
+            self.load_current_image()
+    
+    def on_batch_translate_error(self, error_msg):
+        """批量翻译出错"""
+        # 隐藏进度条和停止按钮
+        self.progress_frame.pack_forget()
+        self.stop_batch_btn.pack_forget()
+        
+        # 启用批量翻译按钮
+        self.batch_translate_btn.configure(state="normal")
+        
+        # 显示错误
+        messagebox.showerror("批量翻译出错", f"批量翻译过程中出错:\n{error_msg}")
+        self.show_status(f"批量翻译出错: {error_msg[:50]}")
+    
+    def stop_batch_translate(self):
+        """停止批量翻译"""
+        if self.batch_translate_running:
+            self.batch_translate_stop_flag = True
+            self.show_status("正在停止批量翻译...")
+            self.stop_batch_btn.configure(state="disabled", text="停止中...")

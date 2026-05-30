@@ -217,8 +217,8 @@
   "conversion_error": "转换 {file} 时出错: {error}",
   "conversion_complete": "转换完成。总共转换了 {total} 个文件。",
   "skip_existing_file": "跳过 (文件已存在): {input} -> {output}",
-  
-  "tab_caption_editor": "标注编辑器",
+
+  "tab_caption_editor": "图片标注编辑器(中英)",
   "caption_load_images": "加载图片",
   "caption_prev": "上一张",
   "caption_next": "下一张",
