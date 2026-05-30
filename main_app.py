@@ -9,6 +9,8 @@ from image_stitcher_gui import ImageStitcherFrame # Import the image stitcher fr
 from image_processor_gui import ImageProcessorFrame # Import the new image processor frame
 from jpg_to_png_gui import JpgToPngFrame # Import the new JPG to PNG frame
 from image_rotator_gui import ImageRotatorFrame # Import the new image rotator frame
+from caption_editor_frame_gui import CaptionEditorFrame # 导入图片标注
+
 import webbrowser
 # Import other tool modules here later
 
@@ -43,6 +45,7 @@ class MainApplication(ctk.CTk):
         self.image_processor_tab_name = self.lang_manager.get_text('tab_image_processor') # Get initial name for image processor tab
         self.jpg_to_png_tab_name = self.lang_manager.get_text('tab_jpg_to_png') # Get initial name for JPG to PNG tab
         self.image_rotator_tab_name = self.lang_manager.get_text('tab_image_rotator') # Get initial name for image rotator tab
+        self.caption_editor_tab_name = self.lang_manager.get_text('tab_caption_editor') # caption
 
         self.tab_view.add(self.renamer_tab_name)
         self.tab_view.add(self.resizer_tab_name)
@@ -52,6 +55,7 @@ class MainApplication(ctk.CTk):
         self.tab_view.add(self.image_processor_tab_name) # Add the new image processor tab
         self.tab_view.add(self.jpg_to_png_tab_name) # Add the new JPG to PNG tab
         self.tab_view.add(self.image_rotator_tab_name) # Add the new image rotator tab
+        self.tab_view.add(self.caption_editor_tab_name) # add caption
         # self.tab_view.add("Tool 4")
 
         # --- Embed Tool GUIs ---
@@ -64,6 +68,7 @@ class MainApplication(ctk.CTk):
         self.image_processor_tab_frame = self.tab_view.tab(self.image_processor_tab_name) # Get the new image processor tab frame
         self.jpg_to_png_tab_frame = self.tab_view.tab(self.jpg_to_png_tab_name) # Get the JPG to PNG tab frame
         self.image_rotator_tab_frame = self.tab_view.tab(self.image_rotator_tab_name) # Get the image rotator tab frame
+        self.caption_editor_tab_frame = self.tab_view.tab(self.caption_editor_tab_name) # caption
 
         # Instantiate and pack the RenamerFrame into its tab
         self.renamer_app = RenamerFrame(self.renamer_tab_frame, self.lang_manager)
@@ -96,6 +101,10 @@ class MainApplication(ctk.CTk):
         # Instantiate and pack the ImageRotatorFrame into its tab
         self.image_rotator_app = ImageRotatorFrame(self.image_rotator_tab_frame, self.lang_manager)
         self.image_rotator_app.pack(expand=True, fill="both")
+
+        # caption
+        self.caption_editor_app = CaptionEditorFrame(self.caption_editor_tab_frame, self.lang_manager)
+        self.caption_editor_app.pack(expand=True, fill="both")
 
         # GitHub 仓库地址
         self.github_label = ctk.CTkLabel(self, text="GitHub: https://github.com/dependon/sucaitools", cursor="hand2", text_color="#78e46f")
@@ -169,6 +178,8 @@ class MainApplication(ctk.CTk):
         new_image_processor_name = self.lang_manager.get_text('tab_image_processor') # Get new name for the image processor tab
         new_jpg_to_png_name = self.lang_manager.get_text('tab_jpg_to_png') # Get new name for the JPG to PNG tab
         new_image_rotator_name = self.lang_manager.get_text('tab_image_rotator') # Get new name for the image rotator tab
+        # 找到更新标签名的地方，添加：
+        new_caption_editor_name = self.lang_manager.get_text('tab_caption_editor')
 
         # Store current tab for later
         current_tab = self.tab_view.get()
@@ -207,6 +218,12 @@ class MainApplication(ctk.CTk):
             self.image_rotator_app.destroy()
             del self.image_rotator_app
 
+        # 清理旧的帧（在清理其他帧的地方添加）
+        if hasattr(self, 'caption_editor_app'):
+            self.caption_editor_app.pack_forget()
+            self.caption_editor_app.destroy()
+            del self.caption_editor_app
+
         # Remove all existing tabs
         for tab in self.tab_view._tab_dict.copy():
             self.tab_view._tab_dict[tab].grid_remove()
@@ -224,6 +241,8 @@ class MainApplication(ctk.CTk):
         self.tab_view.add(new_image_processor_name) # Add new image processor tab with updated name
         self.tab_view.add(new_jpg_to_png_name) # Add new JPG to PNG tab with updated name
         self.tab_view.add(new_image_rotator_name) # Add new image rotator tab with updated name
+        # 重新添加标签页
+        self.tab_view.add(new_caption_editor_name)
 
         # Update stored names
         self.renamer_tab_name = new_renamer_name
@@ -234,6 +253,7 @@ class MainApplication(ctk.CTk):
         self.image_processor_tab_name = new_image_processor_name # Store new image processor tab name
         self.jpg_to_png_tab_name = new_jpg_to_png_name # Store new JPG to PNG tab name
         self.image_rotator_tab_name = new_image_rotator_name # Store new image rotator tab name
+        self.caption_editor_tab_name = new_caption_editor_name
 
         # Get new tab frames and ensure they are ready
         self.renamer_tab_frame = self.tab_view.tab(new_renamer_name)
@@ -244,6 +264,8 @@ class MainApplication(ctk.CTk):
         self.image_processor_tab_frame = self.tab_view.tab(new_image_processor_name) # Get new image processor tab frame
         self.jpg_to_png_tab_frame = self.tab_view.tab(new_jpg_to_png_name) # Get new JPG to PNG tab frame
         self.image_rotator_tab_frame = self.tab_view.tab(new_image_rotator_name) # Get new image rotator tab frame
+        self.caption_editor_tab_frame = self.tab_view.tab(new_caption_editor_name)
+
 
         # Update the UI before repacking
         self.update()
@@ -287,6 +309,10 @@ class MainApplication(ctk.CTk):
         self.image_rotator_app.pack(expand=True, fill="both")
         self.image_rotator_app.update_ui_texts()
 
+        # 重新实例化
+        self.caption_editor_app = CaptionEditorFrame(self.caption_editor_tab_frame, self.lang_manager)
+        self.caption_editor_app.pack(expand=True, fill="both")
+        self.caption_editor_app.update_ui_texts()
 
         # Try to set the previously selected tab
         try:
@@ -306,6 +332,8 @@ class MainApplication(ctk.CTk):
                 self.tab_view.set(new_jpg_to_png_name)
             elif current_tab == self.image_rotator_tab_name: # Handle setting the image rotator tab
                 self.tab_view.set(new_image_rotator_name)
+            elif current_tab == self.caption_editor_tab_name: # Handle setting the image rotator tab
+                self.tab_view.set(new_caption_editor_name)
         except Exception as e:
             print(f"Error setting current tab: {e}")
             # Default to first tab if there's an error

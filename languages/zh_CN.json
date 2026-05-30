@@ -216,5 +216,20 @@
   "conversion_success": "转换成功: {input} -> {output}",
   "conversion_error": "转换 {file} 时出错: {error}",
   "conversion_complete": "转换完成。总共转换了 {total} 个文件。",
-  "skip_existing_file": "跳过 (文件已存在): {input} -> {output}"
+  "skip_existing_file": "跳过 (文件已存在): {input} -> {output}",
+  
+  "tab_caption_editor": "标注编辑器",
+  "caption_load_images": "加载图片",
+  "caption_prev": "上一张",
+  "caption_next": "下一张",
+  "caption_save": "保存修改",
+  "caption_refresh": "刷新",
+  "caption_config": "配置",
+  "caption_status_ready": "准备就绪",
+  "caption_status_loading": "正在加载...",
+  "caption_status_saved": "保存成功",
+  "caption_english": "英文描述",
+  "caption_chinese": "中文翻译",
+  "caption_translate_cn_to_en": "中→英翻译",
+  "caption_translate_en_to_cn": "英→中翻译"
 }
