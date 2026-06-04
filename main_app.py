@@ -1,5 +1,7 @@
+from caption.caption_editor_frame_gui import CaptionEditorFrame
 import customtkinter as ctk
 from tkinter import ttk
+from gif_splitter_gui import GifSplitterFrame
 from language_manager import LanguageManager
 from rename_images_gui import RenamerFrame # Import the refactored frame
 from image_resizer_gui import ImageResizerFrame # Import the image resizer frame
@@ -9,7 +11,6 @@ from image_stitcher_gui import ImageStitcherFrame # Import the image stitcher fr
 from image_processor_gui import ImageProcessorFrame # Import the new image processor frame
 from jpg_to_png_gui import JpgToPngFrame # Import the new JPG to PNG frame
 from image_rotator_gui import ImageRotatorFrame # Import the new image rotator frame
-from caption_editor_frame_gui import CaptionEditorFrame # 导入图片标注
 
 import webbrowser
 # Import other tool modules here later
@@ -46,6 +47,7 @@ class MainApplication(ctk.CTk):
         self.jpg_to_png_tab_name = self.lang_manager.get_text('tab_jpg_to_png') # Get initial name for JPG to PNG tab
         self.image_rotator_tab_name = self.lang_manager.get_text('tab_image_rotator') # Get initial name for image rotator tab
         self.caption_editor_tab_name = self.lang_manager.get_text('tab_caption_editor') # caption
+        self.gif_splitter_tab_name = self.lang_manager.get_text('tab_gif_splitter') # gif
 
         self.tab_view.add(self.renamer_tab_name)
         self.tab_view.add(self.resizer_tab_name)
@@ -56,6 +58,7 @@ class MainApplication(ctk.CTk):
         self.tab_view.add(self.jpg_to_png_tab_name) # Add the new JPG to PNG tab
         self.tab_view.add(self.image_rotator_tab_name) # Add the new image rotator tab
         self.tab_view.add(self.caption_editor_tab_name) # add caption
+        self.tab_view.add(self.gif_splitter_tab_name)
         # self.tab_view.add("Tool 4")
 
         # --- Embed Tool GUIs ---
@@ -69,6 +72,7 @@ class MainApplication(ctk.CTk):
         self.jpg_to_png_tab_frame = self.tab_view.tab(self.jpg_to_png_tab_name) # Get the JPG to PNG tab frame
         self.image_rotator_tab_frame = self.tab_view.tab(self.image_rotator_tab_name) # Get the image rotator tab frame
         self.caption_editor_tab_frame = self.tab_view.tab(self.caption_editor_tab_name) # caption
+        self.gif_splitter_tab_frame = self.tab_view.tab(self.gif_splitter_tab_name)
 
         # Instantiate and pack the RenamerFrame into its tab
         self.renamer_app = RenamerFrame(self.renamer_tab_frame, self.lang_manager)
@@ -105,6 +109,9 @@ class MainApplication(ctk.CTk):
         # caption
         self.caption_editor_app = CaptionEditorFrame(self.caption_editor_tab_frame, self.lang_manager)
         self.caption_editor_app.pack(expand=True, fill="both")
+
+        self.gif_splitter_app = GifSplitterFrame(self.gif_splitter_tab_frame, self.lang_manager)
+        self.gif_splitter_app.pack(expand=True, fill="both")
 
         # GitHub 仓库地址
         self.github_label = ctk.CTkLabel(self, text="GitHub: https://github.com/dependon/sucaitools", cursor="hand2", text_color="#78e46f")
@@ -178,6 +185,7 @@ class MainApplication(ctk.CTk):
         new_image_processor_name = self.lang_manager.get_text('tab_image_processor') # Get new name for the image processor tab
         new_jpg_to_png_name = self.lang_manager.get_text('tab_jpg_to_png') # Get new name for the JPG to PNG tab
         new_image_rotator_name = self.lang_manager.get_text('tab_image_rotator') # Get new name for the image rotator tab
+        new_gif_splitter_name = self.lang_manager.get_text('tab_gif_splitter')
         # 找到更新标签名的地方，添加：
         new_caption_editor_name = self.lang_manager.get_text('tab_caption_editor')
 
@@ -224,6 +232,11 @@ class MainApplication(ctk.CTk):
             self.caption_editor_app.destroy()
             del self.caption_editor_app
 
+        if hasattr(self, 'gif_splitter_app'):
+            self.gif_splitter_app.pack_forget()
+            self.gif_splitter_app.destroy()
+            del self.gif_splitter_app
+
         # Remove all existing tabs
         for tab in self.tab_view._tab_dict.copy():
             self.tab_view._tab_dict[tab].grid_remove()
@@ -243,6 +256,7 @@ class MainApplication(ctk.CTk):
         self.tab_view.add(new_image_rotator_name) # Add new image rotator tab with updated name
         # 重新添加标签页
         self.tab_view.add(new_caption_editor_name)
+        self.tab_view.add(new_gif_splitter_name)
 
         # Update stored names
         self.renamer_tab_name = new_renamer_name
@@ -254,6 +268,7 @@ class MainApplication(ctk.CTk):
         self.jpg_to_png_tab_name = new_jpg_to_png_name # Store new JPG to PNG tab name
         self.image_rotator_tab_name = new_image_rotator_name # Store new image rotator tab name
         self.caption_editor_tab_name = new_caption_editor_name
+        self.gif_splitter_tab_name = new_gif_splitter_name
 
         # Get new tab frames and ensure they are ready
         self.renamer_tab_frame = self.tab_view.tab(new_renamer_name)
@@ -265,7 +280,7 @@ class MainApplication(ctk.CTk):
         self.jpg_to_png_tab_frame = self.tab_view.tab(new_jpg_to_png_name) # Get new JPG to PNG tab frame
         self.image_rotator_tab_frame = self.tab_view.tab(new_image_rotator_name) # Get new image rotator tab frame
         self.caption_editor_tab_frame = self.tab_view.tab(new_caption_editor_name)
-
+        self.gif_splitter_tab_frame = self.tab_view.tab(new_gif_splitter_name)
 
         # Update the UI before repacking
         self.update()
@@ -313,6 +328,10 @@ class MainApplication(ctk.CTk):
         self.caption_editor_app = CaptionEditorFrame(self.caption_editor_tab_frame, self.lang_manager)
         self.caption_editor_app.pack(expand=True, fill="both")
         self.caption_editor_app.update_ui_texts()
+
+        self.gif_splitter_app = GifSplitterFrame(self.gif_splitter_tab_frame, self.lang_manager)
+        self.gif_splitter_app.pack(expand=True, fill="both")
+        self.gif_splitter_app.update_ui_texts()
 
         # Try to set the previously selected tab
         try:

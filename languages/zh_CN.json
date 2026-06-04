@@ -76,7 +76,6 @@
   "error_select_input": "请选择输入文件夹。",
   "error_select_output": "请选择输出文件夹。",
   "error_invalid_percentage": "无效的百分比值。请输入 1 到 1000 之间的数字。",
-  "error_invalid_dimensions": "无效的尺寸。宽度和高度必须是正数。",
   "confirm_resize_start": "开始缩放图片吗？",
 
   "select_video_file": "视频文件:",
@@ -209,12 +208,9 @@
 
   "select_folder_placeholder": "选择包含JPG图片的文件夹",
   "recursive_processing": "递归处理子文件夹",
-  "start_conversion": "开始转换",
   "confirm_title": "确认操作",
   "confirm_jpg_to_png_operation": "这将把文件夹 '{folder}' 中的所有JPG图片转换为PNG格式。确定吗？",
   "processing_folder": "正在处理文件夹: {folder}",
-  "conversion_success": "转换成功: {input} -> {output}",
-  "conversion_error": "转换 {file} 时出错: {error}",
   "conversion_complete": "转换完成。总共转换了 {total} 个文件。",
   "skip_existing_file": "跳过 (文件已存在): {input} -> {output}",
 
@@ -231,5 +227,21 @@
   "caption_english": "英文描述",
   "caption_chinese": "中文翻译",
   "caption_translate_cn_to_en": "中→英翻译",
-  "caption_translate_en_to_cn": "英→中翻译"
+  "caption_translate_en_to_cn": "英→中翻译",
+
+  "tab_gif_splitter": "GIF拆分图片",
+  "select_gif_file": "选择GIF文件:",
+  "select_gif_file_dialog_title": "选择GIF文件",
+  "gif_files": "GIF文件",
+  "custom_output_folder": "自定义输出目录:",
+  "use_default_output": "使用默认输出目录 (GIF同目录下新建文件夹)",
+  "gif_info": "GIF信息:",
+  "no_gif_selected": "未选择GIF文件",
+  "gif_selected": "已选择GIF文件: {filename}",
+  "start_split": "开始拆分",
+  "splitting_started": "开始拆分GIF...",
+  "splitting_complete": "GIF拆分完成! 共拆分为 {count} 帧",
+  "splitting_error": "拆分GIF时出错: {error}",
+  "output_location": "输出位置: {path}",
+  "confirm_split": "开始拆分GIF吗?"
 }

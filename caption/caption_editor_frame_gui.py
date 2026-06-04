@@ -1,17 +1,25 @@
+from caption.GifWindow import GifWindow
+from caption.ThumbnailWindow import ThumbnailWindow
+from caption.config_dialog import ConfigDialog
+from caption.translator_manager import TranslatorManager
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import os
 import glob
 from pathlib import Path
 import threading
 import json
+import shutil
 from typing import Optional, List, Dict, Tuple
 import requests
 import re
-from config_dialog import ConfigDialog
-from translator_manager import TranslatorManager
 import time
 from tkinter import messagebox
+from tkinter import ttk
+import random
+import string
+from datetime import datetime
+
 
 class CaptionEditorFrame(ctk.CTkFrame):
     def __init__(self, master, lang_manager):
@@ -20,9 +28,10 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.lang_manager = lang_manager
         self.current_index = 0
         self.image_paths = []
-        self.caption_pairs = []  # 存储[(图片路径, 英文txt路径)]
+        self.caption_pairs = []  # 存储[(图片路径, 中文txt路径, 英文txt路径)]
         self.current_image_path = ""
-        self.current_caption_path = ""
+        self.current_caption_cn_txt_path = ""
+        self.current_caption_en_txt_path = ""
         
         # 翻译器配置
         secretjson = self.load_json_script_dir("tentcent_secretkey.json")
@@ -33,6 +42,10 @@ class CaptionEditorFrame(ctk.CTkFrame):
             'ai_service': None,
             'ai_api_key': ''
         }
+        
+        # 缩略图窗口引用
+        self.thumbnail_window = None
+        self.gif_window = None
         
         # 加载配置
         self.load_config()
@@ -45,22 +58,6 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.create_widgets()
         self.update_ui_texts()
     
-    def load_json_script_dir(self, filename: str) -> dict:
-        """
-        加载脚本所在目录下的JSON文件
-        
-        Args:
-            filename: JSON文件名
-        """
-        # 获取脚本文件所在的目录
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_dir, filename)
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        return data
-
     def create_widgets(self):
         """创建界面组件"""
         # 主容器
@@ -94,6 +91,17 @@ class CaptionEditorFrame(ctk.CTkFrame):
             command=self.load_images
         )
         self.load_btn.pack(side="left", padx=5)
+        
+        # 缩略图按钮
+        self.thumbnail_btn = ctk.CTkButton(
+            folder_frame,
+            text="缩略图",
+            width=80,
+            command=self.open_thumbnail_window,
+            fg_color="#7B1FA2",  # 紫色
+            hover_color="#6A1B9A"
+        )
+        self.thumbnail_btn.pack(side="left", padx=5)
         
         # 导航控制
         nav_frame = ctk.CTkFrame(control_frame)
@@ -271,6 +279,22 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.english_text.bind("<<Modified>>", self.on_text_modified)
         self.chinese_text.bind("<<Modified>>", self.on_text_modified)
     
+    def open_thumbnail_window(self):
+        """打开缩略图窗口"""
+        if not hasattr(self, 'thumbnail_window') or not self.thumbnail_window or not self.thumbnail_window.winfo_exists():
+            self.thumbnail_window = ThumbnailWindow(self.master, self)
+        else:
+            self.thumbnail_window.lift()
+            self.thumbnail_window.focus_force()
+    
+    def open_gif_window(self):
+        """打开GIF窗口"""
+        if not hasattr(self, 'gif_window') or not self.gif_window or not self.gif_window.winfo_exists():
+            self.gif_window = GifWindow(self.master, self)
+        else:
+            self.gif_window.lift()
+            self.gif_window.focus_force()
+    
     def update_ui_texts(self):
         """更新界面文本"""
         # 这里可以根据语言管理器更新文本
@@ -319,10 +343,10 @@ class CaptionEditorFrame(ctk.CTkFrame):
         # 查找对应的标注文件
         self.caption_pairs = []
         for img_path in all_image_paths:
-            txt_path = img_path + '.txt'
-            if os.path.exists(txt_path):
-                self.caption_pairs.append((img_path, txt_path))
-        
+            cn_txt_path = os.path.splitext(img_path)[0] + '.txt'
+            en_txt_path = os.path.splitext(img_path)[0] + '_en.txt'
+            self.caption_pairs.append((img_path, cn_txt_path, en_txt_path))
+
         if not self.caption_pairs:
             self.show_status(f"在文件夹中未找到任何图片对应的txt标注文件")
             return
@@ -336,16 +360,16 @@ class CaptionEditorFrame(ctk.CTkFrame):
         if not self.caption_pairs or self.current_index >= len(self.caption_pairs):
             return
         
-        img_path, txt_path = self.caption_pairs[self.current_index]
+        img_path, cn_txt_path, en_txt_path= self.caption_pairs[self.current_index]
         self.current_image_path = img_path
-        self.current_caption_path = txt_path
-        
+        self.current_caption_cn_txt_path = cn_txt_path
+        self.current_caption_en_txt_path = en_txt_path
         # 显示图片
         self.display_image(img_path)
         
         # 加载标注文本
         try:
-            with open(txt_path, 'r', encoding='utf-8') as f:
+            with open(en_txt_path, 'r', encoding='utf-8') as f:
                 english_caption = f.read().strip()
         except:
             english_caption = ""
@@ -355,7 +379,8 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.english_text.insert("1.0", english_caption)
         
         # 尝试从关联文件加载中文翻译，如果存在的话
-        chinese_path = os.path.splitext(txt_path)[0] + '_cn.txt'
+        #chinese_path = os.path.splitext(cn_txt_path)[0] + '_cn.txt'
+        chinese_path = cn_txt_path
         chinese_caption = ""
         if os.path.exists(chinese_path):
             try:
@@ -381,7 +406,6 @@ class CaptionEditorFrame(ctk.CTkFrame):
         self.next_btn.configure(state="normal" if self.current_index < len(self.caption_pairs) - 1 else "disabled")
         
         # 显示当前文件的中文翻译状态
-        chinese_path = os.path.splitext(txt_path)[0] + '_cn.txt'
         if os.path.exists(chinese_path):
             self.show_status(f"已加载: {os.path.basename(img_path)} (已有中文翻译)")
         else:
@@ -530,9 +554,13 @@ class CaptionEditorFrame(ctk.CTkFrame):
             self.show_status("英文文本不能为空")
             return
         
+        if not english_text:
+            self.show_status("中文文本不能为空")
+            return
+        
         # 保存英文文本
         try:
-            with open(self.current_caption_path, 'w', encoding='utf-8') as f:
+            with open(self.current_caption_en_txt_path, 'w', encoding='utf-8') as f:
                 f.write(english_text)
         except Exception as e:
             self.show_status(f"保存英文失败: {str(e)}")
@@ -540,7 +568,7 @@ class CaptionEditorFrame(ctk.CTkFrame):
         
         # 保存中文翻译到单独文件
         if chinese_text:
-            chinese_path = os.path.splitext(self.current_caption_path)[0] + '_cn.txt'
+            chinese_path = self.current_caption_cn_txt_path
             try:
                 with open(chinese_path, 'w', encoding='utf-8') as f:
                     f.write(chinese_text)
@@ -633,14 +661,14 @@ class CaptionEditorFrame(ctk.CTkFrame):
                 self.translator_config
             )
             
-            for i, (img_path, txt_path) in enumerate(self.caption_pairs):
+            for i, (img_path, cn_txt_path, en_txt_path) in enumerate(self.caption_pairs):
                 # 检查是否被停止
                 if self.batch_translate_stop_flag:
                     self.after(0, lambda: self.show_status("批量翻译已停止"))
                     break
                 
                 # 检查是否已有中文翻译
-                chinese_path = os.path.splitext(txt_path)[0] + '_cn.txt'
+                chinese_path = cn_txt_path
                 if os.path.exists(chinese_path):
                     # 已有中文翻译，跳过
                     skipped_count += 1
@@ -650,7 +678,7 @@ class CaptionEditorFrame(ctk.CTkFrame):
                 
                 # 读取英文文本
                 try:
-                    with open(txt_path, 'r', encoding='utf-8') as f:
+                    with open(en_txt_path, 'r', encoding='utf-8') as f:
                         english_text = f.read().strip()
                 except:
                     english_text = ""
@@ -767,3 +795,19 @@ class CaptionEditorFrame(ctk.CTkFrame):
             self.batch_translate_stop_flag = True
             self.show_status("正在停止批量翻译...")
             self.stop_batch_btn.configure(state="disabled", text="停止中...")
+    
+    def load_json_script_dir(self, filename: str) -> dict:
+        """
+        加载脚本所在目录下的JSON文件
+        
+        Args:
+            filename: JSON文件名
+        """
+        # 获取脚本文件所在的目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_dir, filename)
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        return data

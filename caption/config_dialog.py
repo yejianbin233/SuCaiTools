@@ -257,7 +257,7 @@ class ConfigDialog(ctk.CTkToplevel):
                     
                 elif current_service == 'baidu':
                     # 测试百度翻译
-                    from translator_manager import BaiduTranslator
+                    from caption.translator_manager import BaiduTranslator
                     translator = BaiduTranslator(temp_config)
                     result = translator.translate_to_chinese("hello")
                     if "hello" not in result.lower() and len(result) > 0:
@@ -267,7 +267,7 @@ class ConfigDialog(ctk.CTkToplevel):
                         
                 elif current_service == 'tencent':
                     # 测试腾讯翻译
-                    from translator_manager import TencentTranslator
+                    from caption.translator_manager import TencentTranslator
                     translator = TencentTranslator(temp_config)
                     result = translator.translate_to_chinese("hello")
                     if "hello" not in result.lower() and len(result) > 0:
@@ -277,7 +277,7 @@ class ConfigDialog(ctk.CTkToplevel):
                         
                 elif current_service == 'youdao':
                     # 测试有道翻译
-                    from translator_manager import YoudaoTranslator
+                    from caption.translator_manager import YoudaoTranslator
                     translator = YoudaoTranslator(temp_config)
                     result = translator.translate_to_chinese("hello")
                     if "hello" not in result.lower() and len(result) > 0:
@@ -287,7 +287,7 @@ class ConfigDialog(ctk.CTkToplevel):
                         
                 elif current_service in ['openai', 'deepseek', 'qwen']:
                     # 测试AI翻译
-                    from translator_manager import AITranslator
+                    from caption.translator_manager import AITranslator
                     temp_config['ai_service'] = current_service
                     translator = AITranslator(temp_config)
                     result = translator.translate_to_chinese("hello")
