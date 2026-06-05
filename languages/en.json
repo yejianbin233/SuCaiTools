@@ -308,5 +308,6 @@
   "gif_generate": "Generate GIF",
   "gif_no_images": "No images found",
   "gif_select_first": "Please select images first",
-  "gif_interval_select": "Interval Select"
+  "gif_interval_select": "Interval Select",
+  "mask_edit": "Mask Edit"
 }

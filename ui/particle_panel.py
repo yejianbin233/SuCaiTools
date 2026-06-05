@@ -8,8 +8,8 @@ GIF粒子提取器面板
 import os
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QTextEdit, QSpinBox,
     QProgressBar, QGroupBox, QMessageBox, QFileDialog,
     QListWidget, QListWidgetItem, QSplitter,
     QSizePolicy
@@ -70,12 +70,16 @@ class ImageLabel(QLabel):
         # 交互状态
         self.is_drawing: bool = False
         self.is_moving: bool = False
+        self.is_resizing: bool = False
+        self.resize_edge: str = ""       # top/bottom/left/right/topleft/topright/bottomleft/bottomright
+        self.resize_anchor: tuple = (0, 0, 0, 0)  # 对角锚点 (x,y,w,h) 原始坐标
         self.draw_start: QPoint | None = None
         self.draw_current: QPoint | None = None
         self.move_offset: QPoint | None = None
 
-        # 鼠标追踪
+        # 鼠标追踪（用于边缘检测显示光标）
         self.setMouseTracking(True)
+        self._edge_threshold = 8  # 边缘检测像素阈值
 
     # ---------- 图片加载 ----------
 
@@ -168,6 +172,24 @@ class ImageLabel(QLabel):
             painter.setPen(QPen(color, 1))
             painter.drawText(cx1 + 3, cy1 + 13, label)
 
+            # 选中遮罩的调整手柄（8个点：四角+四边中点）
+            if is_selected:
+                handle_size = 6
+                handles = [
+                    (cx1, cy1), (cx1 + (cx2-cx1)//2, cy1), (cx2, cy1),
+                    (cx2, cy1 + (cy2-cy1)//2), (cx2, cy2),
+                    (cx1 + (cx2-cx1)//2, cy2), (cx1, cy2),
+                    (cx1, cy1 + (cy2-cy1)//2),
+                ]
+                for hx, hy in handles:
+                    painter.fillRect(
+                        int(hx - handle_size//2), int(hy - handle_size//2),
+                        handle_size, handle_size, QColor('#ffffff'))
+                    painter.setPen(QPen(color, 1))
+                    painter.drawRect(
+                        int(hx - handle_size//2), int(hy - handle_size//2),
+                        handle_size, handle_size)
+
         # 正在绘制的预览矩形
         if self.is_drawing and self.draw_start and self.draw_current:
             pen = QPen(MASK_DRAWING_COLOR, 2, Qt.PenStyle.DashLine)
@@ -199,68 +221,204 @@ class ImageLabel(QLabel):
                 return i
         return -1
 
+    def _get_resize_edge(self, mask_idx: int, cx: int, cy: int) -> str:
+        """检测鼠标是否在遮罩边缘或手柄上（用于调整大小），返回边缘名称"""
+        if mask_idx < 0:
+            return ""
+        m = self.masks[mask_idx]
+        # 转换4个角的显示坐标
+        dl = int(m['x'] * self.scale_factor) + self.offset_x
+        dt = int(m['y'] * self.scale_factor) + self.offset_y
+        dr = int((m['x'] + m['width']) * self.scale_factor) + self.offset_x
+        db = int((m['y'] + m['height']) * self.scale_factor) + self.offset_y
+        th = self._edge_threshold
+        # 扩大检测范围（包含手柄区域）
+        hh = 8  # 手柄半尺寸
+
+        # 检查8个手柄位置
+        corners = [
+            (dl, dt, 'topleft'), (dl + (dr-dl)//2, dt, 'top'),
+            (dr, dt, 'topright'), (dr, dt + (db-dt)//2, 'right'),
+            (dr, db, 'bottomright'), (dl + (dr-dl)//2, db, 'bottom'),
+            (dl, db, 'bottomleft'), (dl, dt + (db-dt)//2, 'left'),
+        ]
+        for hx, hy, name in corners:
+            if abs(cx - hx) <= hh and abs(cy - hy) <= hh:
+                return name
+
+        # 备选：边缘线条检测（扩大范围）
+        on_left = abs(cx - dl) <= th and dt - th <= cy <= db + th
+        on_right = abs(cx - dr) <= th and dt - th <= cy <= db + th
+        on_top = abs(cy - dt) <= th and dl - th <= cx <= dr + th
+        on_bottom = abs(cy - db) <= th and dl - th <= cx <= dr + th
+
+        if on_top and on_left: return 'topleft'
+        if on_top and on_right: return 'topright'
+        if on_bottom and on_left: return 'bottomleft'
+        if on_bottom and on_right: return 'bottomright'
+        if on_left: return 'left'
+        if on_right: return 'right'
+        if on_top: return 'top'
+        if on_bottom: return 'bottom'
+        return ""
+
     # ---------- 鼠标事件 ----------
 
     def mousePressEvent(self, event: QMouseEvent):
-        """鼠标按下：开始绘制或选中遮罩"""
+        """鼠标按下：开始绘制/选中遮罩/调整大小"""
         if not self.original_pixmap:
             return
 
+        mx, my = int(event.position().x()), int(event.position().y())
+
         if event.button() == Qt.MouseButton.LeftButton:
-            clicked_idx = self._find_mask_at(event.position().x(), event.position().y())
-            if clicked_idx >= 0:
-                # 点击遮罩→选中并准备移动
-                self.selected_mask_idx = clicked_idx
-                self.is_moving = True
+            # 优先检测遮罩边缘（用于调整大小）— 边缘点击可能在遮罩外部
+            edge_idx = -1
+            edge_name = ""
+            for i in range(len(self.masks) - 1, -1, -1):
+                e = self._get_resize_edge(i, mx, my)
+                if e:
+                    edge_idx = i
+                    edge_name = e
+                    break
+
+            if edge_idx >= 0:
+                # 拖拽边缘→调整大小
+                self.selected_mask_idx = edge_idx
+                m = self.masks[edge_idx]
+                self.is_resizing = True
+                self.is_moving = False
                 self.is_drawing = False
-                ox, oy = self._canvas_to_original(
-                    int(event.position().x()), int(event.position().y()))
+                self.resize_edge = edge_name
+                if 'left' in edge_name:
+                    anchor_x = m['x'] + m['width']
+                else:
+                    anchor_x = m['x']
+                if 'top' in edge_name:
+                    anchor_y = m['y'] + m['height']
+                else:
+                    anchor_y = m['y']
+                self.resize_anchor = (anchor_x, anchor_y, m['width'], m['height'])
+            elif (clicked_idx := self._find_mask_at(mx, my)) >= 0:
+                # 点击遮罩内部→移动
+                self.selected_mask_idx = clicked_idx
                 m = self.masks[clicked_idx]
+                ox, oy = self._canvas_to_original(mx, my)
+                self.is_moving = True
+                self.is_resizing = False
+                self.is_drawing = False
                 self.move_offset = QPoint(ox - m['x'], oy - m['y'])
             else:
                 # 点击空白→开始绘制新遮罩
                 self.selected_mask_idx = -1
                 self.is_drawing = True
                 self.is_moving = False
-                self.draw_start = QPoint(int(event.position().x()), int(event.position().y()))
+                self.is_resizing = False
+                self.draw_start = QPoint(mx, my)
                 self.draw_current = self.draw_start
             self._update_display()
             self.masks_changed.emit()
 
         elif event.button() == Qt.MouseButton.RightButton:
-            # 右键删除
             if self.is_drawing:
                 self.is_drawing = False
-            clicked_idx = self._find_mask_at(event.position().x(), event.position().y())
+            clicked_idx = self._find_mask_at(mx, my)
             if clicked_idx >= 0:
                 del self.masks[clicked_idx]
                 self.selected_mask_idx = -1
             self.is_moving = False
+            self.is_resizing = False
             self._update_display()
             self.masks_changed.emit()
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        """鼠标移动：更新绘制预览或移动遮罩"""
+        """鼠标移动：更新绘制预览、移动遮罩或调整大小"""
         if not self.original_pixmap:
             return
 
+        mx, my = int(event.position().x()), int(event.position().y())
+
         if self.is_drawing:
-            self.draw_current = QPoint(int(event.position().x()), int(event.position().y()))
+            self.draw_current = QPoint(mx, my)
+            self._update_display()
+
+        elif self.is_resizing and self.selected_mask_idx >= 0:
+            m = self.masks[self.selected_mask_idx]
+            ox, oy = self._canvas_to_original(mx, my)
+            img_w, img_h = self.original_size
+            edge = self.resize_edge
+
+            # 使用delta方式计算（相对于锚点，更直观）
+            if 'left' in edge:
+                # 左边拖拽：锚点在右边，左边界跟随鼠标
+                anchor_right = m['x'] + m['width']
+                new_left = max(0, min(ox, anchor_right - MIN_MASK_SIZE))
+                m['width'] = anchor_right - new_left
+                m['x'] = new_left
+            elif 'right' in edge:
+                # 右边拖拽：锚点在左边，右边界跟随鼠标
+                new_right = max(m['x'] + MIN_MASK_SIZE, ox)
+                m['width'] = min(new_right - m['x'], img_w - m['x'])
+
+            if 'top' in edge:
+                # 上边拖拽：锚点在下边，上边界跟随鼠标
+                anchor_bottom = m['y'] + m['height']
+                new_top = max(0, min(oy, anchor_bottom - MIN_MASK_SIZE))
+                m['height'] = anchor_bottom - new_top
+                m['y'] = new_top
+            elif 'bottom' in edge:
+                # 下边拖拽：锚点在上边，下边界跟随鼠标
+                new_bottom = max(m['y'] + MIN_MASK_SIZE, oy)
+                m['height'] = min(new_bottom - m['y'], img_h - m['y'])
+
             self._update_display()
 
         elif self.is_moving and self.selected_mask_idx >= 0 and self.move_offset:
-            ox, oy = self._canvas_to_original(
-                int(event.position().x()), int(event.position().y()))
+            ox, oy = self._canvas_to_original(mx, my)
             m = self.masks[self.selected_mask_idx]
             new_x = ox - self.move_offset.x()
             new_y = oy - self.move_offset.y()
-            # 边界钳制
             img_w, img_h = self.original_size
             new_x = max(0, min(new_x, img_w - m['width']))
             new_y = max(0, min(new_y, img_h - m['height']))
             m['x'] = new_x
             m['y'] = new_y
             self._update_display()
+
+        else:
+            # 非拖拽状态：根据鼠标位置更新光标样式
+            self._update_cursor(mx, my)
+
+    def _update_cursor(self, mx: int, my: int):
+        """根据鼠标悬停位置更新光标样式"""
+        # 检查选中遮罩的边缘
+        if self.selected_mask_idx >= 0:
+            edge = self._get_resize_edge(self.selected_mask_idx, mx, my)
+            if edge:
+                cursor_map = {
+                    'left': Qt.CursorShape.SizeHorCursor,
+                    'right': Qt.CursorShape.SizeHorCursor,
+                    'top': Qt.CursorShape.SizeVerCursor,
+                    'bottom': Qt.CursorShape.SizeVerCursor,
+                    'topleft': Qt.CursorShape.SizeFDiagCursor,
+                    'bottomright': Qt.CursorShape.SizeFDiagCursor,
+                    'topright': Qt.CursorShape.SizeBDiagCursor,
+                    'bottomleft': Qt.CursorShape.SizeBDiagCursor,
+                }
+                self.setCursor(cursor_map.get(edge, Qt.CursorShape.ArrowCursor))
+                return
+
+        # 检查是否在任意遮罩内部
+        if self._find_mask_at(mx, my) >= 0:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+
+        # 默认光标
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def leaveEvent(self, event):
+        """鼠标离开控件时恢复默认光标"""
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """鼠标释放：完成绘制或移动"""
@@ -292,6 +450,8 @@ class ImageLabel(QLabel):
 
         elif self.is_moving:
             self.is_moving = False
+        elif self.is_resizing:
+            self.is_resizing = False
 
     def resizeEvent(self, event):
         """窗口大小变化时重新缩放图片"""
@@ -389,6 +549,28 @@ class ParticlePanel(BaseToolPanel):
         self.mask_list.currentRowChanged.connect(self._on_mask_selected)
         right_layout.addWidget(self.mask_list)
 
+        # 选中遮罩的手动编辑区域
+        edit_label = QLabel()
+        edit_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        right_layout.addWidget(edit_label)
+        self.mask_edit_label = edit_label
+
+        edit_grid = QGridLayout()
+        edit_grid.setSpacing(2)
+        for row, (key, label) in enumerate([
+            ('x', 'X'), ('y', 'Y'), ('w', 'W'), ('h', 'H')
+        ]):
+            lbl = QLabel(f"  {label}:")
+            lbl.setFixedWidth(24)
+            edit_grid.addWidget(lbl, row, 0)
+            spin = QSpinBox()
+            spin.setRange(0, 99999)
+            spin.setMinimumWidth(140)
+            spin.valueChanged.connect(lambda v, k=key: self._on_mask_edit(k, v))
+            edit_grid.addWidget(spin, row, 1)
+            setattr(self, f'mask_{key}_spin', spin)
+        right_layout.addLayout(edit_grid)
+
         self.delete_mask_btn = QPushButton()
         self.delete_mask_btn.clicked.connect(self._delete_mask)
         self.delete_mask_btn.setMinimumWidth(180)
@@ -470,6 +652,7 @@ class ParticlePanel(BaseToolPanel):
         self.clear_masks_btn.setText(self.tr("btn_clear_masks"))
         self.save_masks_btn.setText(self.tr("btn_save_masks"))
         self.load_masks_btn.setText(self.tr("btn_load_masks"))
+        self.mask_edit_label.setText(self.tr("mask_edit"))
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
@@ -582,12 +765,14 @@ class ParticlePanel(BaseToolPanel):
         self._update_mask_list()
 
     def _on_mask_selected(self, idx: int):
-        """遮罩列表选中→同步到图片显示"""
+        """遮罩列表选中→同步到图片显示和编辑框"""
         self.image_label.selected_mask_idx = idx
         self.image_label._update_display()
+        self._update_mask_edits()
 
     def _update_mask_list(self):
         """更新遮罩列表（从image_label同步）"""
+        self.mask_list.blockSignals(True)
         self.mask_list.clear()
         for i, mask in enumerate(self.image_label.masks):
             text = (f"{mask['label']}  ({mask['x']},{mask['y']}) "
@@ -598,6 +783,43 @@ class ParticlePanel(BaseToolPanel):
             self.mask_list.addItem(item)
             if i == self.image_label.selected_mask_idx:
                 self.mask_list.setCurrentRow(i)
+        self.mask_list.blockSignals(False)
+        self._update_mask_edits()
+
+    def _update_mask_edits(self):
+        """根据选中的遮罩更新编辑框数值"""
+        idx = self.image_label.selected_mask_idx
+        if 0 <= idx < len(self.image_label.masks):
+            m = self.image_label.masks[idx]
+            self.mask_x_spin.blockSignals(True)
+            self.mask_y_spin.blockSignals(True)
+            self.mask_w_spin.blockSignals(True)
+            self.mask_h_spin.blockSignals(True)
+            self.mask_x_spin.setValue(m['x'])
+            self.mask_y_spin.setValue(m['y'])
+            self.mask_w_spin.setValue(m['width'])
+            self.mask_h_spin.setValue(m['height'])
+            self.mask_x_spin.blockSignals(False)
+            self.mask_y_spin.blockSignals(False)
+            self.mask_w_spin.blockSignals(False)
+            self.mask_h_spin.blockSignals(False)
+            self.mask_x_spin.setEnabled(True)
+            self.mask_y_spin.setEnabled(True)
+            self.mask_w_spin.setEnabled(True)
+            self.mask_h_spin.setEnabled(True)
+        else:
+            self.mask_x_spin.setEnabled(False)
+            self.mask_y_spin.setEnabled(False)
+            self.mask_w_spin.setEnabled(False)
+            self.mask_h_spin.setEnabled(False)
+
+    def _on_mask_edit(self, key: str, value: int):
+        """手动编辑遮罩数值"""
+        idx = self.image_label.selected_mask_idx
+        if 0 <= idx < len(self.image_label.masks):
+            self.image_label.masks[idx][key] = value
+            self.image_label._update_display()
+            self._update_mask_list()
 
     # ---------- 遮罩保存/加载 ----------
 
