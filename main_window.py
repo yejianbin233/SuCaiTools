@@ -32,6 +32,7 @@ from ui.jpg_to_png_panel import JpgToPngPanel
 from ui.rotate_panel import RotatePanel
 from ui.particle_panel import ParticlePanel
 from ui.caption_panel import CaptionPanel
+from ui.gif_maker_panel import GifMakerPanel
 
 
 class MainWindow(QMainWindow):
@@ -51,6 +52,7 @@ class MainWindow(QMainWindow):
         (RotatePanel,          "tab_image_rotator",       "图片旋转"),
         (ParticlePanel,        "tab_particle_extractor",  "粒子提取器"),
         (CaptionPanel,         "tab_caption_editor",      "Caption编辑器"),
+        (GifMakerPanel,        "tab_gif_maker",           "GIF合成"),
     ]
 
     def __init__(self):

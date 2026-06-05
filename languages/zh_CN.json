@@ -337,5 +337,14 @@
   "Reset": "重置",
   "Restore Defaults": "恢复默认",
   "Help": "帮助",
-  "Discard": "放弃"
+  "Discard": "放弃",
+  "tab_gif_maker": "GIF合成",
+  "reverse_selection": "反选",
+  "gif_fps": "帧率:",
+  "gif_size": "输出尺寸:",
+  "gif_loop": "循环次数:",
+  "gif_output_name": "输出文件名:",
+  "gif_generate": "合成GIF",
+  "gif_no_images": "未找到图片",
+  "gif_select_first": "请先勾选要合成的图片"
 }

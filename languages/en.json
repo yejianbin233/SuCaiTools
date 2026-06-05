@@ -298,5 +298,14 @@
   "Reset": "Reset",
   "Restore Defaults": "Restore Defaults",
   "Help": "Help",
-  "Discard": "Discard"
+  "Discard": "Discard",
+  "tab_gif_maker": "GIF Maker",
+  "reverse_selection": "Invert",
+  "gif_fps": "FPS:",
+  "gif_size": "Output Size:",
+  "gif_loop": "Loop Count:",
+  "gif_output_name": "Output Name:",
+  "gif_generate": "Generate GIF",
+  "gif_no_images": "No images found",
+  "gif_select_first": "Please select images first"
 }
