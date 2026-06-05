@@ -8,15 +8,15 @@ GIF粒子提取器面板
 import os
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QLineEdit, QPushButton, QTextEdit, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit,
     QProgressBar, QGroupBox, QMessageBox, QFileDialog,
-    QListWidget, QListWidgetItem, QSplitter, QScrollArea,
+    QListWidget, QListWidgetItem, QSplitter,
     QSizePolicy
 )
-from PySide6.QtCore import Qt, QThreadPool, QRect, QPoint, Signal, QTimer
+from PySide6.QtCore import Qt, QThreadPool, QRect, QPoint, Signal, QTimer, QSize
 from PySide6.QtGui import (
-    QPixmap, QImage, QPainter, QPen, QColor, QFont, QMouseEvent
+    QPixmap, QImage, QPainter, QPen, QColor, QFont, QMouseEvent, QIcon
 )
 
 from core.base_panel import BaseToolPanel
@@ -80,23 +80,35 @@ class ImageLabel(QLabel):
     # ---------- 图片加载 ----------
 
     def load_image(self, path: str):
-        """加载并显示参考帧图片"""
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            # 用QImageReader获取详细错误
-            from PySide6.QtGui import QImageReader
-            reader = QImageReader(path)
-            err = reader.errorString()
-            print(f"[粒子面板] 无法加载图片: {path}")
-            print(f"  Qt错误: {err}")
+        """加载参考帧图片（会清空已有遮罩）"""
+        if not self._load_pixmap(path):
             return False
-        self.original_pixmap = pixmap
-        self.original_size = (pixmap.width(), pixmap.height())
         self.masks.clear()
         self.next_mask_id = 1
         self.selected_mask_idx = -1
         self._update_display()
         self.masks_changed.emit()
+        return True
+
+    def switch_image(self, path: str):
+        """切换参考帧图片（保留已有遮罩）"""
+        if not self._load_pixmap(path):
+            return False
+        self._update_display()
+        return True
+
+    def _load_pixmap(self, path: str):
+        """加载pixmap底层逻辑"""
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            from PySide6.QtGui import QImageReader
+            reader = QImageReader(path)
+            print(f"[粒子面板] 无法加载图片: {path}")
+            print(f"  Qt错误: {reader.errorString()}")
+            return False
+        self.original_pixmap = pixmap
+        self.original_size = (pixmap.width(), pixmap.height())
+        return True
         return True
 
     def _update_display(self):
@@ -302,45 +314,69 @@ class ParticlePanel(BaseToolPanel):
     def _setup_ui(self):
         """创建界面布局"""
         layout = QVBoxLayout(self)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
-        # ---- 顶部：文件夹和参考帧选择 ----
-        top_layout = QGridLayout()
-
+        # ---- 顶部：文件夹加载 ----
+        top_layout = QHBoxLayout()
         self.frames_label = QLabel()
-        top_layout.addWidget(self.frames_label, 0, 0)
+        top_layout.addWidget(self.frames_label)
         self.frames_entry = DragDropFolderLineEdit()
         self.frames_entry.textChanged.connect(
             lambda t: setattr(self, 'frames_dir', t.strip()))
-        top_layout.addWidget(self.frames_entry, 0, 1)
+        top_layout.addWidget(self.frames_entry, stretch=1)
         self.frames_btn = QPushButton()
         self.frames_btn.clicked.connect(self._select_frames_dir)
-        top_layout.addWidget(self.frames_btn, 0, 2)
-
-        self.ref_label = QLabel()
-        top_layout.addWidget(self.ref_label, 1, 0)
-        self.ref_entry = QLineEdit()
-        self.ref_entry.setReadOnly(True)
-        top_layout.addWidget(self.ref_entry, 1, 1)
-        self.ref_btn = QPushButton()
-        self.ref_btn.clicked.connect(self._select_ref_image)
-        top_layout.addWidget(self.ref_btn, 1, 2)
+        top_layout.addWidget(self.frames_btn)
         self.load_btn = QPushButton()
-        self.load_btn.clicked.connect(self._load_ref_image)
+        self.load_btn.clicked.connect(self._load_folder)
         self.load_btn.setStyleSheet(
             "QPushButton { background-color: #0078d4; color: white; "
             "padding: 6px 14px; font-weight: bold; border: none; }"
             "QPushButton:hover { background-color: #1084e0; }")
-        top_layout.addWidget(self.load_btn, 1, 3)
-
+        top_layout.addWidget(self.load_btn)
         layout.addLayout(top_layout)
 
-        # ---- 中部：图片显示 + 遮罩列表 ----
-        work_layout = QHBoxLayout()
+        # ---- 中部：缩略图列表 + 图片显示 + 遮罩列表 ----
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 左侧：可绘制遮罩的图片显示
+        # 左侧：缩略图列表
+        thumb_panel = QWidget()
+        thumb_layout = QVBoxLayout(thumb_panel)
+        thumb_layout.setContentsMargins(0, 0, 0, 0)
+        thumb_layout.setSpacing(2)
+
+        thumb_header = QHBoxLayout()
+        self.thumb_label = QLabel()
+        thumb_header.addWidget(self.thumb_label)
+        thumb_header.addStretch()
+        self.thumb_select_all_btn = QPushButton()
+        self.thumb_select_all_btn.clicked.connect(self._thumb_select_all)
+        thumb_header.addWidget(self.thumb_select_all_btn)
+        self.thumb_deselect_btn = QPushButton()
+        self.thumb_deselect_btn.clicked.connect(self._thumb_deselect_all)
+        thumb_header.addWidget(self.thumb_deselect_btn)
+        thumb_layout.addLayout(thumb_header)
+
+        self.thumb_list = QListWidget()
+        self.thumb_list.setIconSize(QSize(64, 48))
+        self.thumb_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.thumb_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.thumb_list.setMovement(QListWidget.Movement.Static)
+        self.thumb_list.setSpacing(2)
+        self.thumb_list.setMinimumWidth(200)
+        self.thumb_list.setMaximumWidth(240)
+        self.thumb_list.itemClicked.connect(self._on_thumb_clicked)
+        thumb_layout.addWidget(self.thumb_list)
+
+        self.thumb_count_label = QLabel()
+        self.thumb_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        thumb_layout.addWidget(self.thumb_count_label)
+
+        splitter.addWidget(thumb_panel)
+
+        # 中间：图片显示
         self.image_label = ImageLabel()
-        work_layout.addWidget(self.image_label, stretch=3)
+        splitter.addWidget(self.image_label)
 
         # 右侧：遮罩列表面板
         right_panel = QGroupBox()
@@ -353,7 +389,6 @@ class ParticlePanel(BaseToolPanel):
         self.mask_list.currentRowChanged.connect(self._on_mask_selected)
         right_layout.addWidget(self.mask_list)
 
-        # 按钮垂直排列，确保文字完整显示
         self.delete_mask_btn = QPushButton()
         self.delete_mask_btn.clicked.connect(self._delete_mask)
         self.delete_mask_btn.setMinimumWidth(180)
@@ -375,9 +410,12 @@ class ParticlePanel(BaseToolPanel):
         right_layout.addWidget(self.load_masks_btn)
 
         right_panel.setFixedWidth(220)
-        work_layout.addWidget(right_panel)
+        splitter.addWidget(right_panel)
 
-        layout.addLayout(work_layout, stretch=1)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 1)
+        layout.addWidget(splitter, stretch=1)
 
         # ---- 底部：操作和日志 ----
         action_layout = QHBoxLayout()
@@ -407,10 +445,9 @@ class ParticlePanel(BaseToolPanel):
 
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.setMaximumHeight(120)
+        self.log_area.setMaximumHeight(100)
         layout.addWidget(self.log_area)
 
-        # 连接图片遮罩变更信号
         self.image_label.masks_changed.connect(self._update_mask_list)
 
         self._log_widget = self.log_area
@@ -424,9 +461,10 @@ class ParticlePanel(BaseToolPanel):
         """更新UI文本"""
         self.frames_label.setText(self.tr("select_frames_folder"))
         self.frames_btn.setText(self.tr("browse"))
-        self.ref_label.setText(self.tr("select_ref_frame"))
-        self.ref_btn.setText(self.tr("browse"))
-        self.load_btn.setText(self.tr("load_ref_frame"))
+        self.load_btn.setText(self.tr("load_images"))
+        self.thumb_label.setText(self.tr("thumbnails"))
+        self.thumb_select_all_btn.setText(self.tr("select_all"))
+        self.thumb_deselect_btn.setText(self.tr("deselect_all"))
         self.mask_list_label.setText(self.tr("masks_panel"))
         self.delete_mask_btn.setText(self.tr("btn_delete_mask"))
         self.clear_masks_btn.setText(self.tr("btn_clear_masks"))
@@ -435,7 +473,7 @@ class ParticlePanel(BaseToolPanel):
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
-    # ---------- 文件操作 ----------
+    # ---------- 文件夹加载 ----------
 
     def _select_frames_dir(self):
         """选择帧序列文件夹"""
@@ -443,28 +481,83 @@ class ParticlePanel(BaseToolPanel):
         if folder:
             self.frames_entry.setText(folder)
 
-    def _select_ref_image(self):
-        """选择参考帧图片"""
-        path = self.browse_file(
-            self.tr("select_ref_frame"),
-            "图片文件 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)")
-        if path:
-            self.ref_entry.setText(path)
-
-    def _load_ref_image(self):
-        """加载参考帧到图片显示组件"""
-        path = self.ref_entry.text().strip()
-        if not path or not os.path.isfile(path):
-            self.show_error(self.tr("error_title"), self.tr("pe_error_no_ref_frame"))
+    def _load_folder(self):
+        """加载文件夹：显示缩略图，自动加载第一张为参考帧"""
+        folder = self.frames_entry.text().strip()
+        if not folder or not os.path.isdir(folder):
             return
-        if self.image_label.load_image(path):
-            self.ref_image_path = path
-            self.log(f"已加载参考帧: {os.path.basename(path)} "
-                     f"({self.image_label.original_size[0]}×"
-                     f"{self.image_label.original_size[1]})")
-            self.status_label.setText(self.tr("status_ready"))
+
+        supported = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+        files = []
+        for f in sorted(os.listdir(folder)):
+            if f.lower().endswith(supported):
+                files.append(os.path.join(folder, f))
+
+        if not files:
+            self.status_label.setText(self.tr("pe_error_no_frames"))
+            return
+
+        self.frames_dir = folder
+        self._build_thumb_list(files)
+
+        # 自动加载第一张为参考帧
+        if self.image_label.load_image(files[0]):
+            self.ref_image_path = files[0]
+            self.log(f"已加载 {len(files)} 张图片，参考帧: {os.path.basename(files[0])}")
+            self.status_label.setText(
+                f"已加载 {len(files)} 张 | 点击缩略图切换参考帧")
         else:
             self.show_error(self.tr("error_title"), "无法加载图片文件")
+
+    # ---------- 缩略图 ----------
+
+    def _build_thumb_list(self, files: list[str]):
+        """构建缩略图列表（带复选框）"""
+        self.thumb_list.clear()
+        for path in files:
+            name = os.path.basename(path)
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                icon = QIcon(pixmap.scaled(
+                    64, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
+            else:
+                icon = QIcon()
+            item = QListWidgetItem(icon, name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)  # 默认全选
+            self.thumb_list.addItem(item)
+        self._update_thumb_count()
+
+    def _on_thumb_clicked(self, item: QListWidgetItem):
+        """点击缩略图→切换参考帧（保留遮罩）"""
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if self.image_label.switch_image(path):
+            self.ref_image_path = path
+            self.status_label.setText(f"参考帧: {os.path.basename(path)}")
+
+    def _thumb_select_all(self):
+        for i in range(self.thumb_list.count()):
+            self.thumb_list.item(i).setCheckState(Qt.CheckState.Checked)
+        self._update_thumb_count()
+
+    def _thumb_deselect_all(self):
+        for i in range(self.thumb_list.count()):
+            self.thumb_list.item(i).setCheckState(Qt.CheckState.Unchecked)
+        self._update_thumb_count()
+
+    def _update_thumb_count(self):
+        checked = sum(1 for i in range(self.thumb_list.count())
+                      if self.thumb_list.item(i).checkState() == Qt.CheckState.Checked)
+        self.thumb_count_label.setText(
+            f"已选 {checked}/{self.thumb_list.count()}")
+
+    def _get_checked_images(self) -> list[str]:
+        """获取已勾选的图片路径列表"""
+        return [self.thumb_list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.thumb_list.count())
+                if self.thumb_list.item(i).checkState() == Qt.CheckState.Checked]
 
     # ---------- 遮罩管理 ----------
 
@@ -560,19 +653,16 @@ class ParticlePanel(BaseToolPanel):
             self.show_error(self.tr("error_title"), self.tr("pe_error_no_masks"))
             return
 
+        # 只处理已勾选的图片
+        checked_files = self._get_checked_images()
+        if not checked_files:
+            self.show_error(self.tr("error_title"), "请先在缩略图中勾选要处理的图片")
+            return
+        total = len(checked_files)
+
         output_dir = os.path.join(self.frames_dir, "particles")
 
         # 确认
-        try:
-            from particle_extractor import ParticleExtractor
-            ext = ParticleExtractor()
-            frame_files = ext.scan_frame_files(self.frames_dir)
-            total = len(frame_files)
-        except Exception as e:
-            self.show_error(self.tr("error_title"), str(e))
-            return
-
-        # 使用自定义按钮确保文本正确显示
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle(self.tr("pe_confirm_extract_title"))
         msg_box.setText(self.tr("pe_confirm_extract").format(
@@ -591,7 +681,7 @@ class ParticlePanel(BaseToolPanel):
         self.log_area.clear()
 
         # 创建提取Worker — 将dict转换为MaskDef对象
-        from particle_extractor import MaskDef
+        from particle_extractor import MaskDef, ParticleExtractor
         maskdefs = [MaskDef(**m) for m in self.image_label.masks]
 
         class ExtractWorker(BaseWorker):
@@ -602,11 +692,39 @@ class ParticlePanel(BaseToolPanel):
 
             def run(slf):
                 try:
-                    result = slf.extractor.extract_particles(
-                        maskdefs, self.frames_dir, output_dir,
-                        progress_callback=lambda c, t:
-                        slf.signals.progress.emit(c, t))
-                    slf.signals.finished.emit(result)
+                    # 直接对勾选的文件列表应用遮罩（不扫描整个目录）
+                    os.makedirs(output_dir, exist_ok=True)
+                    for mask in maskdefs:
+                        os.makedirs(os.path.join(output_dir, mask.label), exist_ok=True)
+
+                    for idx, img_path in enumerate(checked_files):
+                        if slf._stop_flag:
+                            break
+                        try:
+                            from PIL import Image
+                            filename = os.path.basename(img_path)
+                            with Image.open(img_path) as img:
+                                for mask in maskdefs:
+                                    left = max(0, mask.x)
+                                    top = max(0, mask.y)
+                                    right = min(img.width, mask.x + mask.width)
+                                    bottom = min(img.height, mask.y + mask.height)
+                                    if right > left and bottom > top:
+                                        cropped = img.crop((left, top, right, bottom))
+                                        ext = os.path.splitext(img_path)[1]
+                                        out_path = os.path.join(
+                                            output_dir, mask.label,
+                                            os.path.splitext(filename)[0] + ext)
+                                        cropped.save(out_path)
+                        except Exception as e:
+                            slf.signals.log.emit(f"跳过 {img_path}: {e}")
+                        slf.signals.progress.emit(idx + 1, total)
+
+                    slf.signals.log.emit(
+                        f"提取完成! 共处理 {total} 帧 × {len(maskdefs)} 个遮罩")
+                    slf.signals.finished.emit({
+                        'success': True, 'frame_count': total,
+                        'mask_count': len(maskdefs), 'output_dir': output_dir})
                 except Exception as e:
                     slf.signals.error.emit(str(e))
                     slf.signals.finished.emit({'success': False, 'error': str(e)})
