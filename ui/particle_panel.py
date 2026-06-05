@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QSplitter, QScrollArea,
     QSizePolicy
 )
-from PySide6.QtCore import Qt, QThreadPool, QRect, QPoint, Signal
+from PySide6.QtCore import Qt, QThreadPool, QRect, QPoint, Signal, QTimer
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QFont, QMouseEvent
 )
@@ -83,6 +83,12 @@ class ImageLabel(QLabel):
         """加载并显示参考帧图片"""
         pixmap = QPixmap(path)
         if pixmap.isNull():
+            # 用QImageReader获取详细错误
+            from PySide6.QtGui import QImageReader
+            reader = QImageReader(path)
+            err = reader.errorString()
+            print(f"[粒子面板] 无法加载图片: {path}")
+            print(f"  Qt错误: {err}")
             return False
         self.original_pixmap = pixmap
         self.original_size = (pixmap.width(), pixmap.height())
@@ -279,7 +285,8 @@ class ImageLabel(QLabel):
         """窗口大小变化时重新缩放图片"""
         super().resizeEvent(event)
         if self.original_pixmap:
-            self._update_display()
+            # 延迟到当前paint周期结束后再更新，避免BackingStore冲突
+            QTimer.singleShot(0, self._update_display)
 
 
 class ParticlePanel(BaseToolPanel):

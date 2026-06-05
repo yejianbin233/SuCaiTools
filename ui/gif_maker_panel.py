@@ -25,8 +25,9 @@ class GifMakerPanel(BaseToolPanel):
     """GIF合成面板 — 从图片序列合成GIF"""
 
     # 线程安全信号
-    _gif_progress = Signal(str)
-    _gif_finished = Signal(str)
+    _gif_progress = Signal(str)           # 进度文字
+    _gif_bar = Signal(int, int)           # 进度条 (current, total)
+    _gif_finished = Signal(str)           # 完成
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +37,7 @@ class GifMakerPanel(BaseToolPanel):
 
         # 持久信号连接
         self._gif_progress.connect(self._on_progress_msg)
+        self._gif_bar.connect(self._on_progress_bar)
         self._gif_finished.connect(self._on_gif_done)
 
     # ---------- UI ----------
@@ -342,11 +344,10 @@ class GifMakerPanel(BaseToolPanel):
                         frames.append(img.copy())
 
                     self._gif_progress.emit(f"处理中... {idx + 1}/{total}")
-                    self.progress_bar.setMaximum(total)
-                    self.progress_bar.setValue(idx + 1)
+                    self._gif_bar.emit(idx + 1, total)
 
                 if not frames:
-                    self._gif_finished.emit("FAIL: 没有可用的图片帧")
+                    self._gif_finished.emit("FAIL|没有可用的图片帧")
                     return
 
                 duration = int(1000 / fps)
@@ -361,21 +362,26 @@ class GifMakerPanel(BaseToolPanel):
 
                 file_size = os.path.getsize(output_path)
                 self._gif_finished.emit(
-                    f"OK: {output_path}|{len(frames)}|{file_size}")
+                    f"OK|{output_path}|{len(frames)}|{file_size}")
 
             except Exception as e:
-                self._gif_finished.emit(f"FAIL: {str(e)}")
+                self._gif_finished.emit(f"FAIL|{str(e)}")
 
         threading.Thread(target=run, daemon=True).start()
 
     def _on_progress_msg(self, msg: str):
         self.status_label.setText(msg)
 
+    def _on_progress_bar(self, current: int, total: int):
+        """进度条更新 — 在主线程执行"""
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
+
     def _on_gif_done(self, msg: str):
         self.generate_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
 
-        if msg.startswith("OK:"):
+        if msg.startswith("OK|"):
             _, path, frames, size = msg.split("|")
             size_kb = int(size) / 1024
             self.status_label.setText(
@@ -384,6 +390,8 @@ class GifMakerPanel(BaseToolPanel):
                 self, self.tr("info_title"),
                 f"GIF生成完成!\n{int(frames)} 帧\n{size_kb:.0f} KB\n\n"
                 f"保存至: {path}")
-        else:
-            error = msg[5:] if msg.startswith("FAIL:") else msg
+        elif msg.startswith("FAIL|"):
+            error = msg[5:]
             self.status_label.setText(f"生成失败: {error}")
+        else:
+            self.status_label.setText(f"生成失败: {msg}")

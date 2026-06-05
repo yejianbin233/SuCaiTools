@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QTranslator
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QImageReader
 
 from main_window import MainWindow
 
@@ -20,6 +20,10 @@ def main():
     # 高DPI支持
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+
+    # 解除图片加载的256MB限制
+    # 注意: setAllocationLimit参数单位是MB, 默认256MB, 改为2GB
+    QImageReader.setAllocationLimit(2048)
 
     app = QApplication(sys.argv)
     app.setApplicationName("SucaiTools")
