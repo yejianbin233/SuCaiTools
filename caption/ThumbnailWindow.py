@@ -25,6 +25,10 @@ class ThumbnailWindow(ctk.CTkToplevel):
         self.caption_editor = caption_editor
         self.title("图片缩略图浏览器")
         self.geometry("1000x600")
+        # 确保弹窗置顶
+        self.transient(master)
+        self.attributes('-topmost', True)
+        self.after(200, lambda: self.attributes('-topmost', False))
         
         # 存储缩略图和删除状态
         self.thumbnail_buttons = []

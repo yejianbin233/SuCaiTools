@@ -1,0 +1,203 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 工作原则
+
+- 修改前先阅读相关代码，不确定时先问，不猜测
+- 遵循项目现有模式（面板注册、BaseWorker异步、tr()翻译键约定）
+- 只改必要代码，不顺手重构无关部分
+- 所有注释使用中文
+- 遇到问题明确告知，不隐藏
+# CLAUDE.md — 12-rule template
+
+These rules apply to every task in this project unless explicitly overridden.
+
+Bias: caution over speed on non-trivial work. Use judgment on trivial tasks.
+
+
+## Rule 1 — Think Before Coding
+
+State assumptions explicitly. If uncertain, ask rather than guess.
+
+Present multiple interpretations when ambiguity exists.
+
+Push back when a simpler approach exists.
+
+Stop when confused. Name what's unclear.
+
+
+## Rule 2 — Simplicity First
+
+Minimum code that solves the problem. Nothing speculative.
+
+No features beyond what was asked. No abstractions for single-use code.
+
+Test: would a senior engineer say this is overcomplicated? If yes, simplify.
+
+
+## Rule 3 — Surgical Changes
+
+Touch only what you must. Clean up only your own mess.
+
+Don't "improve" adjacent code, comments, or formatting.
+
+Don't refactor what isn't broken. Match existing style.
+
+
+## Rule 4 — Goal-Driven Execution
+
+Define success criteria. Loop until verified.
+
+Don't follow steps. Define success and iterate.
+
+Strong success criteria let you loop independently.
+
+
+## Rule 5 — Use the model only for judgment calls
+
+Use me for: classification, drafting, summarization, extraction.
+
+Do NOT use me for: routing, retries, deterministic transforms.
+
+If code can answer, code answers.
+
+
+## Rule 6 — Token budgets are not advisory
+
+Per-task: 4,000 tokens. Per-session: 30,000 tokens.
+
+If approaching budget, summarize and start fresh.
+
+Surface the breach. Do not silently overrun.
+
+
+## Rule 7 — Surface conflicts, don't average them
+
+If two patterns contradict, pick one (more recent / more tested).
+
+Explain why. Flag the other for cleanup.
+
+Don't blend conflicting patterns.
+
+
+## Rule 8 — Read before you write
+
+Before adding code, read exports, immediate callers, shared utilities.
+
+"Looks orthogonal" is dangerous. If unsure why code is structured a way, ask.
+
+
+## Rule 9 — Tests verify intent, not just behavior
+
+Tests must encode WHY behavior matters, not just WHAT it does.
+
+A test that can't fail when business logic changes is wrong.
+
+
+## Rule 10 — Checkpoint after every significant step
+
+Summarize what was done, what's verified, what's left.
+
+Don't continue from a state you can't describe back.
+
+If you lose track, stop and restate.
+
+
+## Rule 11 — Match the codebase's conventions, even if you disagree
+
+Conformance > taste inside the codebase.
+
+If you genuinely think a convention is harmful, surface it. Don't fork silently.
+
+
+## Rule 12 — Fail loud
+
+"Completed" is wrong if anything was skipped silently.
+
+"Tests pass" is wrong if any were skipped.
+
+Default to surfacing uncertainty, not hiding it.
+
+
+## 常用命令
+
+```bash
+# 运行新版本（PySide6，推荐）
+python main.py
+
+# 运行旧版本（customtkinter，逐步淘汰）
+python main_app.py
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 翻译功能额外依赖（仅旧版caption模块）
+pip install tencentcloud-sdk-python
+
+# 打包
+pyinstaller --onefile --windowed --add-data "languages;languages" --add-data "resources;resources" --name SucaiTools main.py
+```
+
+本项目没有测试套件和 lint 配置。
+
+## 架构总览
+
+项目处于**双框架过渡期**：
+
+| 版本 | 入口 | 框架 | 状态 |
+|------|------|------|------|
+| **新版** | `main.py` → `main_window.py` | PySide6 | 10/11个面板已迁移 |
+| **旧版** | `main_app.py` | customtkinter | 仍可用但逐步淘汰 |
+
+### 新版分层（PySide6）
+
+```
+main.py                      # QApplication入口
+main_window.py               # QMainWindow + QTabWidget，PANEL_REGISTRY注册所有面板
+├── core/                    # 纯逻辑层（零GUI依赖）
+│   ├── base_panel.py        #   BaseToolPanel — changeEvent语言切换、日志、通用对话框
+│   ├── base_worker.py       #   BaseWorker(QRunnable) + WorkerSignals — 信号/槽异步
+│   ├── language_manager.py  #   语言管理器
+│   ├── json_translator.py   #   JsonTranslator(QTranslator子类) — 从JSON加载翻译
+│   └── utils.py             #   DragDropLineEdit — Qt原生拖放
+├── ui/                      # 视图层（每个工具一个QWidget面板）
+│   ├── gif_splitter_panel.py / rename_panel.py / resize_panel.py
+│   ├── jpg_to_png_panel.py / rotate_panel.py / image_processor_panel.py
+│   ├── stitch_panel.py / video2png_panel.py / mp4_to_gif_panel.py
+│   └── particle_panel.py
+├── caption/                 # Caption编辑器（尚未迁移，仍是customtkinter）
+├── resources/style.qss      # 暗色主题
+└── languages/               # JSON翻译文件（7语言，新旧共用）
+```
+
+### 核心模式
+
+**添加新面板**：在 `main_window.py` 的 `PANEL_REGISTRY` 列表追加 `(PanelClass, "tab_key", "默认名")` 即可，tab创建和语言切换自动处理。
+
+**语言切换**：`JsonTranslator` 加载 `languages/{lang}.json` → `installTranslator()` → Qt广播 `QEvent.LanguageChange` → 每个面板 `changeEvent()` → `retranslate_ui()`。**不销毁任何widget**。
+
+**异步任务**：继承 `BaseWorker(QRunnable)`，通过 `WorkerSignals` 的四个信号（finished/progress/log/error）与主线程通信。工作线程禁止直接操作UI。
+
+**拖放**：`DragDropLineEdit` 使用 Qt 原生 `dragEnterEvent`/`dropEvent`，无第三方依赖。
+
+**翻译键**：代码中 `self.tr("语义键")`，全小写snake_case。通用键（`browse`、`error_title`、`stop`、`processing`）直接复用，新增键需同步添加到中英文JSON。
+
+### 旧版已知问题
+
+- 语言切换销毁重建全部组件（`main_app.py:204-356`）
+- `gif_splitter_gui.py:293` 后台线程直接操作UI
+- `mp4_to_gif_gui.py:212` 全部视频帧加载到内存
+- `image_processor_gui.py:449` 引用未定义变量 `resized_img`
+
+### 翻译服务（caption模块）
+
+`caption/translator_manager.py`：`BaseTranslator` → `BaiduTranslator`/`TencentSDKTranslator`/`GoogleTranslator`/`AITranslator`。工厂方法 `TranslatorManager.get_translator()`。
+
+### particle_extractor.py
+
+纯逻辑模块（新旧GUI通用）：`MaskDef` + `ParticleExtractor`（遮罩管理、批量裁剪、JSON序列化、异步处理）。
+
+### CI/CD
+
+`.github/workflows/release.yml`：`v*` 标签触发三平台 PyInstaller 构建。

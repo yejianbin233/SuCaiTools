@@ -21,9 +21,11 @@ class ConfigDialog(ctk.CTkToplevel):
         self.geometry("600x600")
         self.resizable(True, True)
         
-        # 设置模态对话框
+        # 设置模态置顶对话框
         self.transient(parent)
         self.grab_set()
+        self.attributes('-topmost', True)
+        self.after(200, lambda: self.attributes('-topmost', False))
         
         # 居中显示
         self.update_idletasks()

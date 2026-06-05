@@ -201,47 +201,76 @@ class Mp4ToGifFrame(ctk.CTkFrame):
                 self.browse_gif_button.configure(state='normal')
         self.after(0, _finalize_ui)
 
+    # 安全上限：防止内存溢出
+    MAX_GIF_FRAMES = 300
+    MAX_GIF_WIDTH = 480
+
     def convert_mp4_to_gif_opencv(self, mp4_path, gif_path, desired_fps):
         """
-        Converts an MP4 file to a GIF file using OpenCV and Pillow.
+        将MP4视频转换为GIF（使用OpenCV + Pillow）
+
+        改进：采样帧+限制最大帧数+限制分辨率，防止内存溢出。
         """
         cap = cv2.VideoCapture(mp4_path)
         if not cap.isOpened():
             raise IOError(f"无法打开视频文件: {mp4_path}")
 
+        # 获取视频原始FPS和总帧数
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps_to_use = max(1, min(desired_fps, video_fps))
+
+        # 计算采样间隔：每隔N帧取1帧
+        sample_interval = max(1, int(video_fps / fps_to_use))
+        estimated_frames = total_frames // sample_interval
+
+        # 如果估计帧数超过上限，增大采样间隔
+        if estimated_frames > self.MAX_GIF_FRAMES:
+            sample_interval = max(1, total_frames // self.MAX_GIF_FRAMES)
+            estimated_frames = total_frames // sample_interval
+            actual_fps = video_fps / sample_interval
+            self.log(f"帧数超限({estimated_frames}>{self.MAX_GIF_FRAMES})，"
+                     f"自动调整为 {actual_fps:.1f}fps")
+
+        self.log(f"视频: {total_frames}帧/{video_fps:.1f}fps, "
+                 f"采样间隔: {sample_interval}, 目标: {fps_to_use}fps")
+
         frames = []
-        # Use the desired_fps instead of the original video's FPS
-        fps_to_use = desired_fps
-
-        self.log(f"使用帧率: {fps_to_use}")
-
-        while True:
+        frame_idx = 0
+        while len(frames) < self.MAX_GIF_FRAMES:
             ret, frame = cap.read()
             if not ret:
                 break
-            # Convert OpenCV BGR frame to Pillow RGB image
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(img)
-            frames.append(pil_img)
-            # Optional: Log progress
-            # self.log(f"读取帧 {len(frames)}")
+
+            if frame_idx % sample_interval == 0:
+                # BGR→RGB
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(img)
+                # 限制GIF宽度，保持宽高比
+                if pil_img.width > self.MAX_GIF_WIDTH:
+                    ratio = self.MAX_GIF_WIDTH / pil_img.width
+                    new_h = int(pil_img.height * ratio)
+                    pil_img = pil_img.resize(
+                        (self.MAX_GIF_WIDTH, new_h), Image.Resampling.LANCZOS)
+                frames.append(pil_img)
+
+            frame_idx += 1
 
         cap.release()
 
         if not frames:
             raise ValueError("未从视频中读取到任何帧。")
 
-        # Calculate duration per frame in milliseconds using the desired FPS
         duration_ms = int(1000 / fps_to_use)
 
-        self.log(f"共读取 {len(frames)} 帧，开始生成 GIF...")
+        self.log(f"共采样 {len(frames)} 帧，开始生成 GIF...")
 
-        # Save frames as GIF
         frames[0].save(gif_path,
                        save_all=True,
                        append_images=frames[1:],
                        duration=duration_ms,
-                       loop=0) # loop=0 means loop forever
+                       loop=0,
+                       optimize=True)
 
         self.log("GIF 生成完成。")
 

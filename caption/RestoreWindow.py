@@ -24,6 +24,11 @@ class RestoreWindow(ctk.CTkToplevel):
         self.refresh_callback = refresh_callback
         self.title("恢复删除的文件")
         self.geometry("600x400")
+        # 确保弹窗置顶和模态
+        self.transient(master)
+        self.grab_set()
+        self.attributes('-topmost', True)
+        self.after(200, lambda: self.attributes('-topmost', False))
         
         self.create_widgets()
         self.load_temp_folders()

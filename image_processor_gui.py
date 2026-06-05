@@ -445,9 +445,8 @@ class ImageProcessorFrame(ctk.CTkFrame):
                     save_format = None
                     if file_extension in ('.jpg', '.jpeg'):
                         save_format = 'jpeg'
-                        # 如果是RGBA模式，转换为RGB，因为JPEG不支持透明度
-                        if resized_img.mode == 'RGBA':
-                            resized_img = resized_img.convert('RGB')
+                        # RGBA→RGB转换已在上面处理（第435-442行），
+                        # 此处img_to_save已经是正确的格式
                     elif file_extension == '.png':
                         save_format = 'png'
                     elif file_extension == '.bmp':

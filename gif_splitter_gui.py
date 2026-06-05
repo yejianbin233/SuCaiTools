@@ -291,20 +291,9 @@ class GifSplitterFrame(ctk.CTkFrame):
         self.splitter = GifSplitter(log_callback=self.log_message)
         
         def on_complete(result):
-            self.is_processing = False
-            self.split_btn.configure(text=self.texts['start_split'], state="normal")
-            self.browse_gif_btn.configure(state="normal")
-            
-            if result['success']:
-                self.log_message(self.texts['splitting_complete'].format(count=result['frame_count']))
-                self.log_message(self.texts['output_location'].format(path=result['output_dir']))
-                messagebox.showinfo(self.texts['info_title'], 
-                                  f"GIF拆分完成！\n共拆分为 {result['frame_count']} 帧\n输出目录: {result['output_dir']}")
-            else:
-                self.log_message(self.texts['splitting_error'].format(error=result.get('error', '未知错误')))
-                messagebox.showerror(self.texts['error_title'], 
-                                   f"拆分失败: {result.get('error', '未知错误')}")
-        
+            # 通过after回到主线程执行UI操作，避免线程安全问题
+            self.after(0, lambda: self._on_split_complete(result))
+
         # 启动异步拆分
         self.splitter.split_gif_async(
             gif_path=self.gif_path,
@@ -312,6 +301,22 @@ class GifSplitterFrame(ctk.CTkFrame):
             output_format=self.format_var.get(),
             callback=on_complete
         )
+
+    def _on_split_complete(self, result):
+        """拆分完成回调（在主线程执行）"""
+        self.is_processing = False
+        self.split_btn.configure(text=self.texts['start_split'], state="normal")
+        self.browse_gif_btn.configure(state="normal")
+
+        if result['success']:
+            self.log_message(self.texts['splitting_complete'].format(count=result['frame_count']))
+            self.log_message(self.texts['output_location'].format(path=result['output_dir']))
+            messagebox.showinfo(self.texts['info_title'],
+                              f"GIF拆分完成！\n共拆分为 {result['frame_count']} 帧\n输出目录: {result['output_dir']}")
+        else:
+            self.log_message(self.texts['splitting_error'].format(error=result.get('error', '未知错误')))
+            messagebox.showerror(self.texts['error_title'],
+                               f"拆分失败: {result.get('error', '未知错误')}")
     
     def log_message(self, message):
         """添加日志消息"""
