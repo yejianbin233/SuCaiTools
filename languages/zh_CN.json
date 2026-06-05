@@ -348,5 +348,7 @@
   "gif_no_images": "未找到图片",
   "gif_select_first": "请先勾选要合成的图片",
   "gif_interval_select": "间隔勾选",
-  "mask_edit": "遮罩编辑"
+  "mask_edit": "遮罩编辑",
+  "play_frames": "播放序列帧",
+  "play": "播放"
 }

@@ -469,6 +469,9 @@ class ParticlePanel(BaseToolPanel):
         self.frames_dir: str = ""
         self.ref_image_path: str = ""
         self.worker: BaseWorker | None = None
+        self._play_timer: QTimer | None = None
+        self._play_fps: int = 5  # 播放速率（帧/秒）
+        self._play_index: int = 0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -531,6 +534,43 @@ class ParticlePanel(BaseToolPanel):
         self.thumb_count_label = QLabel()
         self.thumb_count_label.setStyleSheet("color: gray; font-size: 11px;")
         thumb_layout.addWidget(self.thumb_count_label)
+
+        # 播放序列帧控件
+        play_label = QLabel()
+        play_label.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        thumb_layout.addWidget(play_label)
+        self.play_label = play_label
+
+        play_row = QHBoxLayout()
+        play_row.setSpacing(4)
+        self.play_slower_btn = QPushButton("-")
+        self.play_slower_btn.setFixedSize(28, 28)
+        self.play_slower_btn.setStyleSheet("QPushButton { padding: 0px; font-size: 16px; font-weight: bold; }")
+        self.play_slower_btn.clicked.connect(self._play_slower)
+        play_row.addWidget(self.play_slower_btn)
+
+        self.play_speed_spin = QSpinBox()
+        self.play_speed_spin.setRange(1, 60)
+        self.play_speed_spin.setValue(5)
+        self.play_speed_spin.setSuffix(" fps")
+        self.play_speed_spin.setFixedWidth(70)
+        self.play_speed_spin.valueChanged.connect(self._on_play_speed_changed)
+        play_row.addWidget(self.play_speed_spin)
+
+        self.play_faster_btn = QPushButton("+")
+        self.play_faster_btn.setFixedSize(28, 28)
+        self.play_faster_btn.setStyleSheet("QPushButton { padding: 0px; font-size: 16px; font-weight: bold; }")
+        self.play_faster_btn.clicked.connect(self._play_faster)
+        play_row.addWidget(self.play_faster_btn)
+
+        self.play_toggle_btn = QPushButton()
+        self.play_toggle_btn.clicked.connect(self._toggle_play)
+        self.play_toggle_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d4; color: white; "
+            "padding: 4px 10px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #1084e0; }")
+        play_row.addWidget(self.play_toggle_btn)
+        thumb_layout.addLayout(play_row)
 
         splitter.addWidget(thumb_panel)
 
@@ -647,6 +687,8 @@ class ParticlePanel(BaseToolPanel):
         self.thumb_label.setText(self.tr("thumbnails"))
         self.thumb_select_all_btn.setText(self.tr("select_all"))
         self.thumb_deselect_btn.setText(self.tr("deselect_all"))
+        self.play_label.setText(self.tr("play_frames"))
+        self.play_toggle_btn.setText("▶ " + self.tr("play"))
         self.mask_list_label.setText(self.tr("masks_panel"))
         self.delete_mask_btn.setText(self.tr("btn_delete_mask"))
         self.clear_masks_btn.setText(self.tr("btn_clear_masks"))
@@ -735,6 +777,72 @@ class ParticlePanel(BaseToolPanel):
                       if self.thumb_list.item(i).checkState() == Qt.CheckState.Checked)
         self.thumb_count_label.setText(
             f"已选 {checked}/{self.thumb_list.count()}")
+
+    # ---------- 播放序列帧 ----------
+
+    def _toggle_play(self):
+        """启动/停止播放序列帧"""
+        if self._play_timer and self._play_timer.isActive():
+            self._play_timer.stop()
+            self.play_toggle_btn.setText("▶ 播放")
+            self.play_toggle_btn.setStyleSheet(
+                "QPushButton { background-color: #0078d4; color: white; "
+                "padding: 4px 10px; font-weight: bold; border: none; }"
+                "QPushButton:hover { background-color: #1084e0; }")
+            return
+
+        if self.thumb_list.count() == 0:
+            return
+
+        if not self._play_timer:
+            self._play_timer = QTimer(self)
+            self._play_timer.timeout.connect(self._play_next_frame)
+
+        self._play_index = 0
+        interval = max(16, 1000 // self._play_fps)  # 最小16ms防过载
+        self._play_timer.start(interval)
+        self._play_next_frame()
+        self.play_toggle_btn.setText("⏸ 停止")
+        self.play_toggle_btn.setStyleSheet(
+            "QPushButton { background-color: #c42b1c; color: white; "
+            "padding: 4px 10px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #d4382b; }")
+
+    def _play_next_frame(self):
+        """播放下一帧：切换显示缩略图中的下一张图片"""
+        count = self.thumb_list.count()
+        if count == 0:
+            self._toggle_play()
+            return
+        self._play_index = (self._play_index + 1) % count
+        path = self.thumb_list.item(self._play_index).data(Qt.ItemDataRole.UserRole)
+        if self.image_label.switch_image(path):
+            self.ref_image_path = path
+            self.status_label.setText(
+                f"播放中 [{self._play_index + 1}/{count}] "
+                f"{os.path.basename(path)}")
+
+    def _play_faster(self):
+        """加快播放速率"""
+        val = self.play_speed_spin.value()
+        if val < 60:
+            self.play_speed_spin.setValue(min(60, val + 5))
+
+    def _play_slower(self):
+        """减慢播放速率"""
+        val = self.play_speed_spin.value()
+        if val > 1:
+            self.play_speed_spin.setValue(max(1, val - 1))
+
+    def _on_play_speed_changed(self, fps: int):
+        """播放速率改变"""
+        self._play_fps = fps
+        if self._play_timer and self._play_timer.isActive():
+            self._play_timer.setInterval(max(16, 1000 // fps))
+
+    def _update_play_speed(self):
+        """更新播放速率显示"""
+        self.play_speed_spin.setValue(self._play_fps)
 
     def _get_checked_images(self) -> list[str]:
         """获取已勾选的图片路径列表"""
