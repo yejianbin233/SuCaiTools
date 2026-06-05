@@ -233,6 +233,13 @@ class GifMakerPanel(BaseToolPanel):
 
         self.image_files = files
         self._build_list()
+
+        # 自动获取第一张图片的分辨率作为GIF输出尺寸
+        first = QPixmap(files[0])
+        if not first.isNull():
+            self.width_spin.setValue(first.width())
+            self.height_spin.setValue(first.height())
+
         self.status_label.setText(f"已加载 {len(files)} 张图片")
         self._update_count()
 
