@@ -46,6 +46,7 @@ class CaptionPanel(BaseToolPanel):
         }
         self._pending_target: QTextEdit | None = None
         self._batch_mode: bool = False
+        self._batch_stop: bool = False
         self._load_translator_config()
         self._setup_ui()
 
@@ -231,6 +232,11 @@ class CaptionPanel(BaseToolPanel):
         self.batch_translate_btn = QPushButton()
         self.batch_translate_btn.clicked.connect(self._batch_translate)
         bottom_layout.addWidget(self.batch_translate_btn)
+        self.batch_stop_btn = QPushButton()
+        self.batch_stop_btn.clicked.connect(self._stop_batch_translate)
+        self.batch_stop_btn.setVisible(False)
+        self.batch_stop_btn.setStyleSheet("color: #c42b1c;")
+        bottom_layout.addWidget(self.batch_stop_btn)
         self.config_btn = QPushButton()
         self.config_btn.clicked.connect(self._open_config)
         bottom_layout.addWidget(self.config_btn)
@@ -256,6 +262,7 @@ class CaptionPanel(BaseToolPanel):
         self.en_label.setText(self.tr("english_caption") + " (name_en.txt)")
         self.en_translate_btn.setText(self.tr("translate_en_to_cn"))
         self.batch_translate_btn.setText(self.tr("batch_translate"))
+        self.batch_stop_btn.setText(self.tr("stop"))
         self.config_btn.setText(self.tr("translator_config"))
 
     # ---------- 图片加载 ----------
@@ -579,6 +586,21 @@ class CaptionPanel(BaseToolPanel):
 
     # ---------- 批量翻译 ----------
 
+    def _stop_batch_translate(self):
+        """停止批量翻译"""
+        self._batch_stop = True
+        self.batch_stop_btn.setEnabled(False)
+        self.status_label.setText("正在停止...")
+
+    def _on_batch_done(self):
+        """批量翻译完成/中断后的UI恢复"""
+        self.batch_translate_btn.setVisible(True)
+        self.batch_stop_btn.setVisible(False)
+        self.batch_stop_btn.setEnabled(True)
+        if self.caption_pairs:
+            self._build_thumbnail_list()
+            self._display_current()
+
     def _get_service(self) -> str:
         """获取可用的翻译服务"""
         service = self.translator_config.get('current_service', 'google')
@@ -590,15 +612,47 @@ class CaptionPanel(BaseToolPanel):
         return service
 
     def _batch_translate(self):
-        """批量翻译：将所有中文标注翻译为英文"""
-        if not self.caption_pairs:
+        """批量翻译TXT：遍历文件夹，将中文.txt翻译为英文_en.txt
+
+        规则:
+        1. 只处理 .txt 文件（非 _en.txt）
+        2. 必须有对应的图片文件（.png/.jpg等）
+        3. 必须不存在对应的 _en.txt 文件
+        """
+        folder = self.folder_entry.text().strip()
+        if not folder or not os.path.isdir(folder):
+            # 尝试使用已加载的 caption_pairs
+            if not self.caption_pairs:
+                self.status_label.setText("请先选择文件夹或加载图片")
+                return
+            # 没有文件夹但有已加载数据，使用老逻辑
+            self._save_changes()
+            pairs = self.caption_pairs
+        else:
+            # 递归扫描文件夹及所有子文件夹 — 从txt出发匹配图片
+            self._save_changes()
+            img_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+            pairs = []
+            for root, _, files in os.walk(folder):
+                for f in sorted(files):
+                    if not f.endswith('.txt') or f.endswith('_en.txt'):
+                        continue
+                    base = os.path.splitext(f)[0]
+                    txt_path = os.path.join(root, f)
+                    en_path = os.path.join(root, f"{base}_en.txt")
+                    # 检查是否有对应图片（同目录下）
+                    has_image = any(
+                        os.path.exists(os.path.join(root, f"{base}{ext}"))
+                        for ext in img_exts)
+                    if has_image:
+                        pairs.append((os.path.join(root, f"{base}.png"), txt_path, en_path))
+
+        if not pairs:
+            self.status_label.setText("没有找到需要翻译的TXT文件")
             return
 
-        # 先保存当前编辑
-        self._save_changes()
-
-        # 统计需要翻译的数量
-        pending = sum(1 for _, cn, en in self.caption_pairs
+        # 统计待处理
+        pending = sum(1 for _, cn, en in pairs
                      if os.path.exists(cn) and not os.path.exists(en))
         if pending == 0:
             self.status_label.setText("所有英文标注已存在，无需翻译")
@@ -606,14 +660,18 @@ class CaptionPanel(BaseToolPanel):
 
         reply = QMessageBox.question(
             self, self.tr("pe_confirm_extract_title"),
-            f"批量翻译 {pending}/{len(self.caption_pairs)} 组中文→英文标注?\n\n"
-            f"(仅处理还没有 _en.txt 的图片)",
+            f"批量翻译 {pending} 个中文TXT → 英文_en.txt?\n\n"
+            f"(递归扫描: {folder if folder else '已加载'})\n"
+            f"条件: 有对应图片 + 无_en.txt",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
 
         self._batch_mode = True
+        self._batch_stop = False
         self._pending_target = None
+        self.batch_translate_btn.setVisible(False)
+        self.batch_stop_btn.setVisible(True)
         self._translate_progress.emit(f"批量翻译中... 0/{pending}")
 
         def run_batch():
@@ -623,8 +681,9 @@ class CaptionPanel(BaseToolPanel):
             done = 0
             errors = 0
 
-            for i, (img_path, cn_txt, en_txt) in enumerate(self.caption_pairs):
-                # 如果英文文件已存在，跳过
+            for i, (img_path, cn_txt, en_txt) in enumerate(pairs):
+                if self._batch_stop:
+                    break
                 if os.path.exists(en_txt) or not os.path.exists(cn_txt):
                     continue
                 try:
@@ -635,27 +694,25 @@ class CaptionPanel(BaseToolPanel):
                     result = translator.translate_to_english(text)
                     with open(en_txt, 'w', encoding='utf-8') as f:
                         f.write(result)
-                    # 更新内存中的pair
-                    self.caption_pairs[i] = (img_path, cn_txt, en_txt)
                     done += 1
-                    # 实时进度
                     self._translate_progress.emit(
-                        f"批量翻译中... {done}/{pending}  [{os.path.basename(img_path)}]")
+                        f"批量翻译中... {done}/{pending}  "
+                        f"[{cn_txt}]")
                 except Exception as e:
                     errors += 1
                     self._translate_progress.emit(
                         f"批量翻译中... {done}/{pending}  "
-                        f"跳过: {os.path.basename(img_path)}")
+                        f"跳过: {cn_txt} ({e})")
 
-            # 完成
             self._batch_mode = False
-            err_info = f", {errors}个失败" if errors > 0 else ""
-            self._translate_progress.emit(
-                f"批量翻译完成! {done}/{pending} 成功{err_info}")
-            # 刷新界面
-            QTimer.singleShot(0, lambda: (
-                self._build_thumbnail_list(),
-                self._display_current()))
+            if self._batch_stop:
+                self._translate_progress.emit(
+                    f"翻译已中断 ({done}/{pending})")
+            else:
+                err_info = f", {errors}个失败" if errors > 0 else ""
+                self._translate_progress.emit(
+                    f"批量翻译完成! {done}/{pending} 成功{err_info}")
+            QTimer.singleShot(0, self._on_batch_done)
 
         threading.Thread(target=run_batch, daemon=True).start()
 
