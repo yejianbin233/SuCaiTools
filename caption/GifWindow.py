@@ -72,8 +72,8 @@ class GifWindow(ctk.CTkToplevel):
         size_frame.pack(fill="x", padx=10, pady=5)
         
         ctk.CTkLabel(size_frame, text="输出尺寸 (宽x高):").pack(side="left", padx=5)
-        self.width_var = ctk.IntVar(value=400)
-        self.height_var = ctk.IntVar(value=300)
+        self.width_var = ctk.IntVar(value=512)
+        self.height_var = ctk.IntVar(value=512)
         
         self.width_entry = ctk.CTkEntry(size_frame, textvariable=self.width_var, width=80)
         self.width_entry.pack(side="left", padx=2)
