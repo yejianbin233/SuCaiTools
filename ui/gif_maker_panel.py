@@ -88,6 +88,17 @@ class GifMakerPanel(BaseToolPanel):
         self.reverse_btn = QPushButton()
         self.reverse_btn.clicked.connect(self._reverse_selection)
         list_header.addWidget(self.reverse_btn)
+
+        # 间隔选择
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(2, 100)
+        self.interval_spin.setValue(2)
+        self.interval_spin.setToolTip("每隔N张勾选一张，2=隔1张选1张")
+        self.interval_spin.setMaximumWidth(60)
+        list_header.addWidget(self.interval_spin)
+        self.interval_btn = QPushButton()
+        self.interval_btn.clicked.connect(self._select_interval)
+        list_header.addWidget(self.interval_btn)
         list_layout.addLayout(list_header)
 
         self.image_list = QListWidget()
@@ -159,7 +170,7 @@ class GifMakerPanel(BaseToolPanel):
         gif_layout.addWidget(self.out_label, 3, 0)
         self.out_entry = QLineEdit()
         self.out_entry.setText("output.gif")
-        gif_layout.addWidget(self.out_entry, 3, 1)
+        gif_layout.addWidget(self.out_entry, 4, 1)
 
         settings_layout.addWidget(gif_group)
 
@@ -205,6 +216,7 @@ class GifMakerPanel(BaseToolPanel):
         self.fps_label.setText(self.tr("gif_fps"))
         self.size_label.setText(self.tr("gif_size"))
         self.loop_label.setText(self.tr("gif_loop"))
+        self.interval_btn.setText(self.tr("gif_interval_select"))
         self.out_label.setText(self.tr("gif_output_name"))
         self.generate_btn.setText(self.tr("gif_generate"))
         self.count_label.setText(self.tr("gif_no_images"))
@@ -287,6 +299,15 @@ class GifMakerPanel(BaseToolPanel):
             new_state = (Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
                          else Qt.CheckState.Checked)
             item.setCheckState(new_state)
+        self._update_count()
+
+    def _select_interval(self):
+        """间隔勾选：从第1张开始，每隔N张勾选一张，不取消已有勾选"""
+        interval = self.interval_spin.value()
+        self.image_list.itemChanged.disconnect()
+        for i in range(0, self.image_list.count(), interval):
+            self.image_list.item(i).setCheckState(Qt.CheckState.Checked)
+        self.image_list.itemChanged.connect(lambda: self._update_count())
         self._update_count()
 
     # ---------- GIF生成 ----------

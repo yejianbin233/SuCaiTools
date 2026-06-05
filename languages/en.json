@@ -307,5 +307,6 @@
   "gif_output_name": "Output Name:",
   "gif_generate": "Generate GIF",
   "gif_no_images": "No images found",
-  "gif_select_first": "Please select images first"
+  "gif_select_first": "Please select images first",
+  "gif_interval_select": "Interval Select"
 }
