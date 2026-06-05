@@ -11,6 +11,7 @@ from image_stitcher_gui import ImageStitcherFrame # Import the image stitcher fr
 from image_processor_gui import ImageProcessorFrame # Import the new image processor frame
 from jpg_to_png_gui import JpgToPngFrame # Import the new JPG to PNG frame
 from image_rotator_gui import ImageRotatorFrame # Import the new image rotator frame
+from particle_extractor_gui import ParticleExtractorFrame # GIF粒子提取器
 
 import webbrowser
 # Import other tool modules here later
@@ -48,6 +49,7 @@ class MainApplication(ctk.CTk):
         self.image_rotator_tab_name = self.lang_manager.get_text('tab_image_rotator') # Get initial name for image rotator tab
         self.caption_editor_tab_name = self.lang_manager.get_text('tab_caption_editor') # caption
         self.gif_splitter_tab_name = self.lang_manager.get_text('tab_gif_splitter') # gif
+        self.particle_extractor_tab_name = self.lang_manager.get_text('tab_particle_extractor') # 粒子提取器
 
         self.tab_view.add(self.renamer_tab_name)
         self.tab_view.add(self.resizer_tab_name)
@@ -59,6 +61,7 @@ class MainApplication(ctk.CTk):
         self.tab_view.add(self.image_rotator_tab_name) # Add the new image rotator tab
         self.tab_view.add(self.caption_editor_tab_name) # add caption
         self.tab_view.add(self.gif_splitter_tab_name)
+        self.tab_view.add(self.particle_extractor_tab_name)
         # self.tab_view.add("Tool 4")
 
         # --- Embed Tool GUIs ---
@@ -73,6 +76,7 @@ class MainApplication(ctk.CTk):
         self.image_rotator_tab_frame = self.tab_view.tab(self.image_rotator_tab_name) # Get the image rotator tab frame
         self.caption_editor_tab_frame = self.tab_view.tab(self.caption_editor_tab_name) # caption
         self.gif_splitter_tab_frame = self.tab_view.tab(self.gif_splitter_tab_name)
+        self.particle_extractor_tab_frame = self.tab_view.tab(self.particle_extractor_tab_name)
 
         # Instantiate and pack the RenamerFrame into its tab
         self.renamer_app = RenamerFrame(self.renamer_tab_frame, self.lang_manager)
@@ -112,6 +116,9 @@ class MainApplication(ctk.CTk):
 
         self.gif_splitter_app = GifSplitterFrame(self.gif_splitter_tab_frame, self.lang_manager)
         self.gif_splitter_app.pack(expand=True, fill="both")
+
+        self.particle_extractor_app = ParticleExtractorFrame(self.particle_extractor_tab_frame, self.lang_manager)
+        self.particle_extractor_app.pack(expand=True, fill="both")
 
         # GitHub 仓库地址
         self.github_label = ctk.CTkLabel(self, text="GitHub: https://github.com/dependon/sucaitools", cursor="hand2", text_color="#78e46f")
@@ -188,6 +195,7 @@ class MainApplication(ctk.CTk):
         new_gif_splitter_name = self.lang_manager.get_text('tab_gif_splitter')
         # 找到更新标签名的地方，添加：
         new_caption_editor_name = self.lang_manager.get_text('tab_caption_editor')
+        new_particle_extractor_name = self.lang_manager.get_text('tab_particle_extractor')
 
         # Store current tab for later
         current_tab = self.tab_view.get()
@@ -237,6 +245,12 @@ class MainApplication(ctk.CTk):
             self.gif_splitter_app.destroy()
             del self.gif_splitter_app
 
+        # 清理粒子提取器旧实例
+        if hasattr(self, 'particle_extractor_app'):
+            self.particle_extractor_app.pack_forget()
+            self.particle_extractor_app.destroy()
+            del self.particle_extractor_app
+
         # Remove all existing tabs
         for tab in self.tab_view._tab_dict.copy():
             self.tab_view._tab_dict[tab].grid_remove()
@@ -257,6 +271,7 @@ class MainApplication(ctk.CTk):
         # 重新添加标签页
         self.tab_view.add(new_caption_editor_name)
         self.tab_view.add(new_gif_splitter_name)
+        self.tab_view.add(new_particle_extractor_name)
 
         # Update stored names
         self.renamer_tab_name = new_renamer_name
@@ -269,6 +284,7 @@ class MainApplication(ctk.CTk):
         self.image_rotator_tab_name = new_image_rotator_name # Store new image rotator tab name
         self.caption_editor_tab_name = new_caption_editor_name
         self.gif_splitter_tab_name = new_gif_splitter_name
+        self.particle_extractor_tab_name = new_particle_extractor_name
 
         # Get new tab frames and ensure they are ready
         self.renamer_tab_frame = self.tab_view.tab(new_renamer_name)
@@ -281,6 +297,7 @@ class MainApplication(ctk.CTk):
         self.image_rotator_tab_frame = self.tab_view.tab(new_image_rotator_name) # Get new image rotator tab frame
         self.caption_editor_tab_frame = self.tab_view.tab(new_caption_editor_name)
         self.gif_splitter_tab_frame = self.tab_view.tab(new_gif_splitter_name)
+        self.particle_extractor_tab_frame = self.tab_view.tab(new_particle_extractor_name)
 
         # Update the UI before repacking
         self.update()
@@ -333,6 +350,11 @@ class MainApplication(ctk.CTk):
         self.gif_splitter_app.pack(expand=True, fill="both")
         self.gif_splitter_app.update_ui_texts()
 
+        # 重新实例化粒子提取器
+        self.particle_extractor_app = ParticleExtractorFrame(self.particle_extractor_tab_frame, self.lang_manager)
+        self.particle_extractor_app.pack(expand=True, fill="both")
+        self.particle_extractor_app.update_ui_texts()
+
         # Try to set the previously selected tab
         try:
             if current_tab == self.renamer_tab_name:
@@ -351,8 +373,10 @@ class MainApplication(ctk.CTk):
                 self.tab_view.set(new_jpg_to_png_name)
             elif current_tab == self.image_rotator_tab_name: # Handle setting the image rotator tab
                 self.tab_view.set(new_image_rotator_name)
-            elif current_tab == self.caption_editor_tab_name: # Handle setting the image rotator tab
+            elif current_tab == self.caption_editor_tab_name:
                 self.tab_view.set(new_caption_editor_name)
+            elif current_tab == self.particle_extractor_tab_name:
+                self.tab_view.set(new_particle_extractor_name)
         except Exception as e:
             print(f"Error setting current tab: {e}")
             # Default to first tab if there's an error
