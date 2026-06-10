@@ -172,6 +172,45 @@ class ImageLabel(QLabel):
             painter.setPen(QPen(color, 1))
             painter.drawText(cx1 + 3, cy1 + 13, label)
 
+            # 所有遮罩都显示中心十字
+            center_cx = cx1 + (cx2 - cx1) // 2
+            center_cy = cy1 + (cy2 - cy1) // 2
+
+            if is_selected:
+                # 选中遮罩：中心十字 + 延伸至图片边界的虚线（对齐辅助线）
+                pen_center = QPen(QColor('#ff4444'), 2)
+                pen_guide = QPen(QColor('#ff4444'), 1, Qt.PenStyle.DashLine)
+                pen_guide.setDashPattern([4, 6])
+            else:
+                # 未选中：淡色小十字
+                pen_center = QPen(QColor(color.red(), color.green(), color.blue(), 120), 1)
+                pen_guide = QPen(Qt.PenStyle.NoPen)
+
+            # 水平辅助线（延伸到图片边界）
+            if is_selected:
+                result_w = result.width()
+                result_h = result.height()
+                painter.setPen(pen_guide)
+                painter.drawLine(0, center_cy, result_w, center_cy)
+                painter.drawLine(center_cx, 0, center_cx, result_h)
+
+            # 中心十字（所有遮罩都画，选中更突出）
+            cross_size = 10 if is_selected else 6
+            painter.setPen(pen_center)
+            painter.drawLine(
+                center_cx - cross_size, center_cy,
+                center_cx + cross_size, center_cy)
+            painter.drawLine(
+                center_cx, center_cy - cross_size,
+                center_cx, center_cy + cross_size)
+
+            # 选中遮罩：半宽/半高范围辅助线（虚线，仅遮罩内部）
+            if is_selected:
+                pen_inner = QPen(QColor('#888888'), 1, Qt.PenStyle.DotLine)
+                painter.setPen(pen_inner)
+                painter.drawLine(center_cx, cy1, center_cx, cy2)
+                painter.drawLine(cx1, center_cy, cx2, center_cy)
+
             # 选中遮罩的调整手柄（8个点：四角+四边中点）
             if is_selected:
                 handle_size = 6
@@ -597,6 +636,7 @@ class ParticlePanel(BaseToolPanel):
 
         edit_grid = QGridLayout()
         edit_grid.setSpacing(2)
+        # X, Y, W, H 四行
         for row, (key, label) in enumerate([
             ('x', 'X'), ('y', 'Y'), ('w', 'W'), ('h', 'H')
         ]):
@@ -608,6 +648,26 @@ class ParticlePanel(BaseToolPanel):
             spin.setMinimumWidth(140)
             spin.valueChanged.connect(lambda v, k=key: self._on_mask_edit(k, v))
             edit_grid.addWidget(spin, row, 1)
+            setattr(self, f'mask_{key}_spin', spin)
+
+        # 质点分隔
+        pivot_label = QLabel()
+        pivot_label.setStyleSheet("font-weight: bold; margin-top: 4px;")
+        right_layout.addWidget(pivot_label)
+        self.pivot_label = pivot_label
+
+        # 半宽 / 半高（调整质点半径，保持中心不变）
+        for row, (key, label) in enumerate([
+            ('hw', 'W/2'), ('hh', 'H/2')
+        ]):
+            lbl = QLabel(f"  {label}:")
+            lbl.setFixedWidth(24)
+            edit_grid.addWidget(lbl, row + 4, 0)
+            spin = QSpinBox()
+            spin.setRange(1, 99999)
+            spin.setMinimumWidth(140)
+            spin.valueChanged.connect(lambda v, k=key: self._on_pivot_edit(k, v))
+            edit_grid.addWidget(spin, row + 4, 1)
             setattr(self, f'mask_{key}_spin', spin)
         right_layout.addLayout(edit_grid)
 
@@ -695,6 +755,7 @@ class ParticlePanel(BaseToolPanel):
         self.save_masks_btn.setText(self.tr("btn_save_masks"))
         self.load_masks_btn.setText(self.tr("btn_load_masks"))
         self.mask_edit_label.setText(self.tr("mask_edit"))
+        self.pivot_label.setText(self.tr("pivot_edit"))
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
@@ -903,31 +964,62 @@ class ParticlePanel(BaseToolPanel):
             self.mask_y_spin.blockSignals(True)
             self.mask_w_spin.blockSignals(True)
             self.mask_h_spin.blockSignals(True)
-            self.mask_x_spin.setValue(m['x'])
-            self.mask_y_spin.setValue(m['y'])
-            self.mask_w_spin.setValue(m['width'])
-            self.mask_h_spin.setValue(m['height'])
+            self.mask_x_spin.setValue(m.get('x', 0))
+            self.mask_y_spin.setValue(m.get('y', 0))
+            self.mask_w_spin.setValue(m.get('width', m.get('w', 0)))
+            self.mask_h_spin.setValue(m.get('height', m.get('h', 0)))
             self.mask_x_spin.blockSignals(False)
             self.mask_y_spin.blockSignals(False)
             self.mask_w_spin.blockSignals(False)
             self.mask_h_spin.blockSignals(False)
+            self.mask_hw_spin.blockSignals(True)
+            self.mask_hh_spin.blockSignals(True)
+            self.mask_hw_spin.setValue(m['width'] // 2)
+            self.mask_hh_spin.setValue(m['height'] // 2)
+            self.mask_hw_spin.blockSignals(False)
+            self.mask_hh_spin.blockSignals(False)
             self.mask_x_spin.setEnabled(True)
             self.mask_y_spin.setEnabled(True)
             self.mask_w_spin.setEnabled(True)
             self.mask_h_spin.setEnabled(True)
+            self.mask_hw_spin.setEnabled(True)
+            self.mask_hh_spin.setEnabled(True)
         else:
             self.mask_x_spin.setEnabled(False)
             self.mask_y_spin.setEnabled(False)
             self.mask_w_spin.setEnabled(False)
             self.mask_h_spin.setEnabled(False)
+            self.mask_hw_spin.setEnabled(False)
+            self.mask_hh_spin.setEnabled(False)
 
     def _on_mask_edit(self, key: str, value: int):
-        """手动编辑遮罩数值"""
+        """手动编辑遮罩数值（x/y/w/h直接修改）"""
         idx = self.image_label.selected_mask_idx
         if 0 <= idx < len(self.image_label.masks):
-            self.image_label.masks[idx][key] = value
+            # 短键→全名映射（与MaskDef字段一致）
+            key_map = {'x': 'x', 'y': 'y', 'w': 'width', 'h': 'height'}
+            real_key = key_map.get(key, key)
+            self.image_label.masks[idx][real_key] = value
             self.image_label._update_display()
             self._update_mask_list()
+            self._update_mask_edits()  # 同步半宽/半高
+
+    def _on_pivot_edit(self, key: str, value: int):
+        """质点编辑：调整半宽/半高，保持中心点不变"""
+        idx = self.image_label.selected_mask_idx
+        if 0 <= idx < len(self.image_label.masks):
+            m = self.image_label.masks[idx]
+            cx = m['x'] + m['width'] // 2    # 中心X
+            cy = m['y'] + m['height'] // 2   # 中心Y
+            if key == 'hw':
+                m['width'] = value * 2
+                m['x'] = cx - value
+            else:  # 'hh'
+                m['height'] = value * 2
+                m['y'] = cy - value
+            self.image_label._update_display()
+            self._update_mask_list()
+            self._update_mask_edits()  # 同步 x/y/w/h
 
     # ---------- 遮罩保存/加载 ----------
 
@@ -942,7 +1034,7 @@ class ParticlePanel(BaseToolPanel):
         try:
             from particle_extractor import ParticleExtractor
             from particle_extractor import MaskDef
-            maskdefs = [MaskDef(**m) for m in self.image_label.masks]
+            maskdefs = [MaskDef(id=m.get('id',0), label=m.get('label',''), x=m.get('x',0), y=m.get('y',0), width=m.get('width', m.get('w',0)), height=m.get('height', m.get('h',0))) for m in self.image_label.masks]
             ParticleExtractor.save_masks_to_file(
                 maskdefs, path,
                 reference_image_path=self.ref_image_path,
@@ -1012,7 +1104,7 @@ class ParticlePanel(BaseToolPanel):
 
         # 创建提取Worker — 将dict转换为MaskDef对象
         from particle_extractor import MaskDef, ParticleExtractor
-        maskdefs = [MaskDef(**m) for m in self.image_label.masks]
+        maskdefs = [MaskDef(id=m.get('id',0), label=m.get('label',''), x=m.get('x',0), y=m.get('y',0), width=m.get('width', m.get('w',0)), height=m.get('height', m.get('h',0))) for m in self.image_label.masks]
 
         class ExtractWorker(BaseWorker):
             def __init__(slf):

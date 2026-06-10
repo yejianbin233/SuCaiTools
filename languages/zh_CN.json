@@ -245,7 +245,7 @@
   "output_location": "输出位置: {path}",
   "confirm_split": "开始拆分GIF吗?",
 
-  "tab_particle_extractor": "GIF粒子提取器",
+  "tab_particle_extractor": "遮罩图片分离器",
   "select_frames_folder": "帧序列文件夹:",
   "select_ref_frame": "参考帧图片:",
   "load_ref_frame": "加载参考帧",
@@ -349,6 +349,7 @@
   "gif_select_first": "请先勾选要合成的图片",
   "gif_interval_select": "间隔勾选",
   "mask_edit": "遮罩编辑",
+  "pivot_edit": "质点(中心对齐)",
   "play_frames": "播放序列帧",
   "play": "播放"
 }

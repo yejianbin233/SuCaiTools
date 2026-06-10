@@ -206,7 +206,7 @@
   "output_location": "Output location: {path}",
   "confirm_split": "Start splitting GIF?",
 
-  "tab_particle_extractor": "GIF Particle Extractor",
+  "tab_particle_extractor": "Mask Image Extractor",
   "select_frames_folder": "Frames Folder:",
   "select_ref_frame": "Reference Frame:",
   "load_ref_frame": "Load Reference Frame",
