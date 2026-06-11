@@ -237,39 +237,27 @@ class ImageLabel(QLabel):
                 painter.drawLine(center_cx, cy1, center_cx, cy2)
                 painter.drawLine(cx1, center_cy, cx2, center_cy)
 
-                # 分段蓝色虚线：从中心点向左右/上下按 seg_w/seg_h 划分
-                seg_w = mask.get('seg_w', mask['width'] // 2)
-                seg_h = mask.get('seg_h', mask['height'] // 2)
-                if seg_w > 0 or seg_h > 0:
+                # 分段蓝色虚线：从左到右/从上到下均匀划分
+                seg_cols = mask.get('seg_cols', 0)
+                seg_rows = mask.get('seg_rows', 0)
+                if seg_cols > 1 or seg_rows > 1:
                     pen_seg = QPen(QColor('#4488ff'), 1.5, Qt.PenStyle.DashLine)
                     pen_seg.setDashPattern([6, 4])
                     painter.setPen(pen_seg)
-                    # 水平分段线（蓝）：按 seg_w 间隔从中心向左右延伸
-                    if seg_w > 0:
-                        x = center_cx
-                        # 向右
-                        while x < cx2:
-                            x += int(seg_w * self.scale_factor)
-                            if x < cx2:
-                                painter.drawLine(x, cy1, x, cy2)
-                        # 向左
-                        x = center_cx
-                        while x > cx1:
-                            x -= int(seg_w * self.scale_factor)
-                            if x > cx1:
-                                painter.drawLine(x, cy1, x, cy2)
-                    # 垂直分段线（蓝）：按 seg_h 间隔从中心向上下延伸
-                    if seg_h > 0:
-                        y = center_cy
-                        while y < cy2:
-                            y += int(seg_h * self.scale_factor)
-                            if y < cy2:
-                                painter.drawLine(cx1, y, cx2, y)
-                        y = center_cy
-                        while y > cy1:
-                            y -= int(seg_h * self.scale_factor)
-                            if y > cy1:
-                                painter.drawLine(cx1, y, cx2, y)
+                    mask_w = cx2 - cx1
+                    mask_h = cy2 - cy1
+                    # 水平分段（列）：从左到右均匀划分
+                    if seg_cols > 1:
+                        col_w = mask_w / seg_cols
+                        for col in range(1, seg_cols):
+                            x = int(cx1 + col * col_w)
+                            painter.drawLine(x, cy1, x, cy2)
+                    # 垂直分段（行）：从上到下均匀划分
+                    if seg_rows > 1:
+                        row_h = mask_h / seg_rows
+                        for row in range(1, seg_rows):
+                            y = int(cy1 + row * row_h)
+                            painter.drawLine(cx1, y, cx2, y)
 
             # 选中遮罩的调整手柄（8个点：四角+四边中点）
             if is_selected:
@@ -752,15 +740,16 @@ class ParticlePanel(BaseToolPanel):
         right_layout.addWidget(seg_label)
         self.seg_label = seg_label
 
-        # 分段 W/seg, H/seg（蓝色虚线显示分段区域，不影响遮罩）
-        for row, (key, label) in enumerate([
-            ('sw', 'W/seg'), ('sh', 'H/seg')
+        # 分段 列数/行数（蓝色虚线从最左/最上开始均匀划分）
+        for row, (key, label, rng) in enumerate([
+            ('sw', '列数', 50), ('sh', '行数', 50)
         ]):
             lbl = QLabel(f"  {label}:")
             lbl.setFixedWidth(60)
             edit_grid.addWidget(lbl, row + 6, 0)
             spin = QSpinBox()
-            spin.setRange(1, 99999)
+            spin.setRange(1, rng)
+            spin.setValue(1)
             spin.setMinimumWidth(160)
             spin._debounce = QTimer()
             spin._debounce.setSingleShot(True)
@@ -1101,8 +1090,8 @@ class ParticlePanel(BaseToolPanel):
             self.mask_h_spin.setEnabled(True)
             self.mask_sw_spin.blockSignals(True)
             self.mask_sh_spin.blockSignals(True)
-            self.mask_sw_spin.setValue(m.get('seg_w', m['width'] // 2))
-            self.mask_sh_spin.setValue(m.get('seg_h', m['height'] // 2))
+            self.mask_sw_spin.setValue(m.get('seg_cols', 1))
+            self.mask_sh_spin.setValue(m.get('seg_rows', 1))
             self.mask_sw_spin.blockSignals(False)
             self.mask_sh_spin.blockSignals(False)
             self.mask_hw_spin.setEnabled(True)
@@ -1145,12 +1134,12 @@ class ParticlePanel(BaseToolPanel):
             self._update_mask_edits()
 
     def _on_segment_edit(self, key: str, value: int):
-        """分段编辑：设置分段W/2或H/2，视觉辅助（不影响遮罩边界）"""
+        """分段编辑：设置列数/行数（单元格数），视觉辅助"""
         idx = self.image_label.selected_mask_idx
         if 0 <= idx < len(self.image_label.masks):
             m = self.image_label.masks[idx]
-            m['seg_w'] = value if key == 'sw' else m.get('seg_w', m['width'] // 2)
-            m['seg_h'] = value if key == 'sh' else m.get('seg_h', m['height'] // 2)
+            m['seg_cols'] = value if key == 'sw' else m.get('seg_cols', 1)
+            m['seg_rows'] = value if key == 'sh' else m.get('seg_rows', 1)
             self.image_label._update_display()
 
     # ---------- 遮罩保存/加载 ----------
