@@ -134,6 +134,7 @@ class GifMakerPanel(BaseToolPanel):
         self.fps_label = QLabel()
         gif_layout.addWidget(self.fps_label, 0, 0)
         self.fps_spin = QSpinBox()
+        self.fps_spin.setKeyboardTracking(False)
         self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(10)
         self.fps_spin.setSuffix(" fps")

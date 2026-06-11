@@ -653,7 +653,11 @@ class ParticlePanel(BaseToolPanel):
         self.play_speed_spin.setValue(5)
         self.play_speed_spin.setSuffix(" fps")
         self.play_speed_spin.setFixedWidth(70)
-        self.play_speed_spin.valueChanged.connect(self._on_play_speed_changed)
+        self._play_debounce = QTimer()
+        self._play_debounce.setSingleShot(True)
+        self._play_debounce.setInterval(350)
+        self.play_speed_spin.valueChanged.connect(lambda: self._play_debounce.start())
+        self._play_debounce.timeout.connect(lambda: self._on_play_speed_changed(self.play_speed_spin.value()))
         play_row.addWidget(self.play_speed_spin)
 
         self.play_faster_btn = QPushButton("+")
@@ -704,9 +708,16 @@ class ParticlePanel(BaseToolPanel):
             lbl.setFixedWidth(60)
             edit_grid.addWidget(lbl, row, 0)
             spin = QSpinBox()
+            spin.setKeyboardTracking(False)
             spin.setRange(0, 99999)
             spin.setMinimumWidth(160)
-            spin.valueChanged.connect(lambda v, k=key: self._on_mask_edit(k, v))
+            # 使用编辑完成信号 + 防抖定时器，避免逐字触发
+            spin._debounce = QTimer()
+            spin._debounce.setSingleShot(True)
+            spin._debounce.setInterval(350)
+            spin._debounce_key = key
+            spin.valueChanged.connect(lambda v, s=spin: s._debounce.start())
+            spin._debounce.timeout.connect(lambda s=spin: self._on_mask_edit(s._debounce_key, s.value()))
             edit_grid.addWidget(spin, row, 1)
             setattr(self, f'mask_{key}_spin', spin)
 
@@ -726,7 +737,12 @@ class ParticlePanel(BaseToolPanel):
             spin = QSpinBox()
             spin.setRange(1, 99999)
             spin.setMinimumWidth(160)
-            spin.valueChanged.connect(lambda v, k=key: self._on_pivot_edit(k, v))
+            spin._debounce = QTimer()
+            spin._debounce.setSingleShot(True)
+            spin._debounce.setInterval(350)
+            spin._debounce_key = key
+            spin.valueChanged.connect(lambda v, s=spin: s._debounce.start())
+            spin._debounce.timeout.connect(lambda s=spin: self._on_pivot_edit(s._debounce_key, s.value()))
             edit_grid.addWidget(spin, row + 4, 1)
             setattr(self, f'mask_{key}_spin', spin)
 
@@ -736,7 +752,7 @@ class ParticlePanel(BaseToolPanel):
         right_layout.addWidget(seg_label)
         self.seg_label = seg_label
 
-        # 分段 W/segNum, H/segNum（蓝色虚线显示分段区域，不影响遮罩）
+        # 分段 W/seg, H/seg（蓝色虚线显示分段区域，不影响遮罩）
         for row, (key, label) in enumerate([
             ('sw', 'W/seg'), ('sh', 'H/seg')
         ]):
@@ -746,7 +762,12 @@ class ParticlePanel(BaseToolPanel):
             spin = QSpinBox()
             spin.setRange(1, 99999)
             spin.setMinimumWidth(160)
-            spin.valueChanged.connect(lambda v, k=key: self._on_segment_edit(k, v))
+            spin._debounce = QTimer()
+            spin._debounce.setSingleShot(True)
+            spin._debounce.setInterval(350)
+            spin._debounce_key = key
+            spin.valueChanged.connect(lambda v, s=spin: s._debounce.start())
+            spin._debounce.timeout.connect(lambda s=spin: self._on_segment_edit(s._debounce_key, s.value()))
             edit_grid.addWidget(spin, row + 6, 1)
             setattr(self, f'mask_{key}_spin', spin)
         right_layout.addLayout(edit_grid)
