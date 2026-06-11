@@ -103,17 +103,43 @@ class ImageLabel(QLabel):
 
     def _load_pixmap(self, path: str):
         """加载pixmap底层逻辑"""
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            from PySide6.QtGui import QImageReader
-            reader = QImageReader(path)
-            print(f"[粒子面板] 无法加载图片: {path}")
-            print(f"  Qt错误: {reader.errorString()}")
+        import os as _os
+        path = _os.path.normpath(path)
+        # 缓存原始pixmap以在加载失败时保持上一次成功状态
+        prev_pixmap = self.original_pixmap
+        prev_size = self.original_size
+        try:
+            pixmap = QPixmap(path)
+            if not pixmap.isNull():
+                self.original_pixmap = pixmap
+                self.original_size = (pixmap.width(), pixmap.height())
+                return True
+            # QPixmap失败时尝试PIL
+            from PIL import Image
+            import io as _io
+            try:
+                img = Image.open(path)
+                img = img.convert('RGBA')
+                buf = _io.BytesIO()
+                img.save(buf, format='PNG')
+                buf.seek(0)
+                pixmap = QPixmap()
+                pixmap.loadFromData(buf.read())
+            except Exception:
+                pass
+            if not pixmap.isNull():
+                self.original_pixmap = pixmap
+                self.original_size = (pixmap.width(), pixmap.height())
+                return True
+            # 全部失败，恢复旧状态
+            print(f"[粒子面板] 无法加载: {_os.path.basename(path)}")
+            self.original_pixmap = prev_pixmap
+            self.original_size = prev_size
             return False
-        self.original_pixmap = pixmap
-        self.original_size = (pixmap.width(), pixmap.height())
-        return True
-        return True
+        except Exception:
+            self.original_pixmap = prev_pixmap
+            self.original_size = prev_size
+            return False
 
     def _update_display(self):
         """更新显示：缩放图片并重绘"""
@@ -204,12 +230,46 @@ class ImageLabel(QLabel):
                 center_cx, center_cy - cross_size,
                 center_cx, center_cy + cross_size)
 
-            # 选中遮罩：半宽/半高范围辅助线（虚线，仅遮罩内部）
+            # 选中遮罩：半宽/半高范围辅助线（灰色虚线，仅遮罩内部）
             if is_selected:
                 pen_inner = QPen(QColor('#888888'), 1, Qt.PenStyle.DotLine)
                 painter.setPen(pen_inner)
                 painter.drawLine(center_cx, cy1, center_cx, cy2)
                 painter.drawLine(cx1, center_cy, cx2, center_cy)
+
+                # 分段蓝色虚线：从中心点向左右/上下按 seg_w/seg_h 划分
+                seg_w = mask.get('seg_w', mask['width'] // 2)
+                seg_h = mask.get('seg_h', mask['height'] // 2)
+                if seg_w > 0 or seg_h > 0:
+                    pen_seg = QPen(QColor('#4488ff'), 1.5, Qt.PenStyle.DashLine)
+                    pen_seg.setDashPattern([6, 4])
+                    painter.setPen(pen_seg)
+                    # 水平分段线（蓝）：按 seg_w 间隔从中心向左右延伸
+                    if seg_w > 0:
+                        x = center_cx
+                        # 向右
+                        while x < cx2:
+                            x += int(seg_w * self.scale_factor)
+                            if x < cx2:
+                                painter.drawLine(x, cy1, x, cy2)
+                        # 向左
+                        x = center_cx
+                        while x > cx1:
+                            x -= int(seg_w * self.scale_factor)
+                            if x > cx1:
+                                painter.drawLine(x, cy1, x, cy2)
+                    # 垂直分段线（蓝）：按 seg_h 间隔从中心向上下延伸
+                    if seg_h > 0:
+                        y = center_cy
+                        while y < cy2:
+                            y += int(seg_h * self.scale_factor)
+                            if y < cy2:
+                                painter.drawLine(cx1, y, cx2, y)
+                        y = center_cy
+                        while y > cy1:
+                            y -= int(seg_h * self.scale_factor)
+                            if y > cy1:
+                                painter.drawLine(cx1, y, cx2, y)
 
             # 选中遮罩的调整手柄（8个点：四角+四边中点）
             if is_selected:
@@ -641,11 +701,11 @@ class ParticlePanel(BaseToolPanel):
             ('x', 'X'), ('y', 'Y'), ('w', 'W'), ('h', 'H')
         ]):
             lbl = QLabel(f"  {label}:")
-            lbl.setFixedWidth(24)
+            lbl.setFixedWidth(60)
             edit_grid.addWidget(lbl, row, 0)
             spin = QSpinBox()
             spin.setRange(0, 99999)
-            spin.setMinimumWidth(140)
+            spin.setMinimumWidth(160)
             spin.valueChanged.connect(lambda v, k=key: self._on_mask_edit(k, v))
             edit_grid.addWidget(spin, row, 1)
             setattr(self, f'mask_{key}_spin', spin)
@@ -661,42 +721,72 @@ class ParticlePanel(BaseToolPanel):
             ('hw', 'W/2'), ('hh', 'H/2')
         ]):
             lbl = QLabel(f"  {label}:")
-            lbl.setFixedWidth(24)
+            lbl.setFixedWidth(60)
             edit_grid.addWidget(lbl, row + 4, 0)
             spin = QSpinBox()
             spin.setRange(1, 99999)
-            spin.setMinimumWidth(140)
+            spin.setMinimumWidth(160)
             spin.valueChanged.connect(lambda v, k=key: self._on_pivot_edit(k, v))
             edit_grid.addWidget(spin, row + 4, 1)
+            setattr(self, f'mask_{key}_spin', spin)
+
+        # 分段分隔
+        seg_label = QLabel()
+        seg_label.setStyleSheet("font-weight: bold; margin-top: 4px;")
+        right_layout.addWidget(seg_label)
+        self.seg_label = seg_label
+
+        # 分段 W/segNum, H/segNum（蓝色虚线显示分段区域，不影响遮罩）
+        for row, (key, label) in enumerate([
+            ('sw', 'W/seg'), ('sh', 'H/seg')
+        ]):
+            lbl = QLabel(f"  {label}:")
+            lbl.setFixedWidth(60)
+            edit_grid.addWidget(lbl, row + 6, 0)
+            spin = QSpinBox()
+            spin.setRange(1, 99999)
+            spin.setMinimumWidth(160)
+            spin.valueChanged.connect(lambda v, k=key: self._on_segment_edit(k, v))
+            edit_grid.addWidget(spin, row + 6, 1)
             setattr(self, f'mask_{key}_spin', spin)
         right_layout.addLayout(edit_grid)
 
         self.delete_mask_btn = QPushButton()
         self.delete_mask_btn.clicked.connect(self._delete_mask)
-        self.delete_mask_btn.setMinimumWidth(180)
+        self.delete_mask_btn.setMinimumHeight(30)
+        self.delete_mask_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         right_layout.addWidget(self.delete_mask_btn)
 
         self.clear_masks_btn = QPushButton()
         self.clear_masks_btn.clicked.connect(self._clear_masks)
-        self.clear_masks_btn.setMinimumWidth(180)
+        self.clear_masks_btn.setMinimumHeight(30)
+        self.clear_masks_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         right_layout.addWidget(self.clear_masks_btn)
 
         self.save_masks_btn = QPushButton()
         self.save_masks_btn.clicked.connect(self._save_masks)
-        self.save_masks_btn.setMinimumWidth(180)
+        self.save_masks_btn.setMinimumHeight(30)
+        self.save_masks_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         right_layout.addWidget(self.save_masks_btn)
 
         self.load_masks_btn = QPushButton()
         self.load_masks_btn.clicked.connect(self._load_masks)
-        self.load_masks_btn.setMinimumWidth(180)
+        self.load_masks_btn.setMinimumHeight(30)
+        self.load_masks_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         right_layout.addWidget(self.load_masks_btn)
 
-        right_panel.setFixedWidth(220)
+        right_panel.setMinimumWidth(320)
+        right_panel.setMaximumWidth(450)
         splitter.addWidget(right_panel)
 
+        # 右侧面板优先保证最小宽度（按钮文本完整显示）
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
-        splitter.setStretchFactor(2, 1)
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([200, 400, 320])
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
         layout.addWidget(splitter, stretch=1)
 
         # ---- 底部：操作和日志 ----
@@ -756,6 +846,7 @@ class ParticlePanel(BaseToolPanel):
         self.load_masks_btn.setText(self.tr("btn_load_masks"))
         self.mask_edit_label.setText(self.tr("mask_edit"))
         self.pivot_label.setText(self.tr("pivot_edit"))
+        self.seg_label.setText(self.tr("seg_edit"))
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
@@ -783,11 +874,12 @@ class ParticlePanel(BaseToolPanel):
             self.status_label.setText(self.tr("pe_error_no_frames"))
             return
 
-        self.frames_dir = folder
+        self.frames_dir = os.path.normpath(folder)
         self._build_thumb_list(files)
 
         # 自动加载第一张为参考帧
-        if self.image_label.load_image(files[0]):
+        first_file = os.path.normpath(files[0])
+        if self.image_label.load_image(first_file):
             self.ref_image_path = files[0]
             self.log(f"已加载 {len(files)} 张图片，参考帧: {os.path.basename(files[0])}")
             self.status_label.setText(
@@ -798,17 +890,18 @@ class ParticlePanel(BaseToolPanel):
     # ---------- 缩略图 ----------
 
     def _build_thumb_list(self, files: list[str]):
-        """构建缩略图列表（带复选框）"""
+        """构建缩略图列表（跳过无法加载的图片）"""
         self.thumb_list.clear()
         for path in files:
             name = os.path.basename(path)
-            pixmap = QPixmap(path)
-            if not pixmap.isNull():
-                icon = QIcon(pixmap.scaled(
-                    64, 48, Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation))
-            else:
-                icon = QIcon()
+            normalized = os.path.normpath(path)
+            pixmap = QPixmap(normalized)
+            if pixmap.isNull():
+                # 跳过无法加载的缩略图
+                continue
+            icon = QIcon(pixmap.scaled(
+                64, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
             item = QListWidgetItem(icon, name)
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -818,7 +911,7 @@ class ParticlePanel(BaseToolPanel):
 
     def _on_thumb_clicked(self, item: QListWidgetItem):
         """点击缩略图→切换参考帧（保留遮罩）"""
-        path = item.data(Qt.ItemDataRole.UserRole)
+        path = os.path.normpath(item.data(Qt.ItemDataRole.UserRole))
         if self.image_label.switch_image(path):
             self.ref_image_path = path
             self.status_label.setText(f"参考帧: {os.path.basename(path)}")
@@ -870,18 +963,21 @@ class ParticlePanel(BaseToolPanel):
             "QPushButton:hover { background-color: #d4382b; }")
 
     def _play_next_frame(self):
-        """播放下一帧：切换显示缩略图中的下一张图片"""
+        """播放下一帧：跳过无法加载的图片"""
         count = self.thumb_list.count()
         if count == 0:
             self._toggle_play()
             return
-        self._play_index = (self._play_index + 1) % count
-        path = self.thumb_list.item(self._play_index).data(Qt.ItemDataRole.UserRole)
-        if self.image_label.switch_image(path):
-            self.ref_image_path = path
-            self.status_label.setText(
-                f"播放中 [{self._play_index + 1}/{count}] "
-                f"{os.path.basename(path)}")
+        # 最多尝试count次，跳过坏帧
+        for _ in range(count):
+            self._play_index = (self._play_index + 1) % count
+            path = self.thumb_list.item(self._play_index).data(Qt.ItemDataRole.UserRole)
+            if self.image_label.switch_image(path):
+                self.ref_image_path = path
+                self.status_label.setText(
+                    f"播放中 [{self._play_index + 1}/{count}] "
+                    f"{os.path.basename(path)}")
+                return
 
     def _play_faster(self):
         """加快播放速率"""
@@ -982,15 +1078,21 @@ class ParticlePanel(BaseToolPanel):
             self.mask_y_spin.setEnabled(True)
             self.mask_w_spin.setEnabled(True)
             self.mask_h_spin.setEnabled(True)
+            self.mask_sw_spin.blockSignals(True)
+            self.mask_sh_spin.blockSignals(True)
+            self.mask_sw_spin.setValue(m.get('seg_w', m['width'] // 2))
+            self.mask_sh_spin.setValue(m.get('seg_h', m['height'] // 2))
+            self.mask_sw_spin.blockSignals(False)
+            self.mask_sh_spin.blockSignals(False)
             self.mask_hw_spin.setEnabled(True)
             self.mask_hh_spin.setEnabled(True)
+            self.mask_sw_spin.setEnabled(True)
+            self.mask_sh_spin.setEnabled(True)
         else:
-            self.mask_x_spin.setEnabled(False)
-            self.mask_y_spin.setEnabled(False)
-            self.mask_w_spin.setEnabled(False)
-            self.mask_h_spin.setEnabled(False)
-            self.mask_hw_spin.setEnabled(False)
-            self.mask_hh_spin.setEnabled(False)
+            for attr in ('x', 'y', 'w', 'h', 'hw', 'hh', 'sw', 'sh'):
+                spin = getattr(self, f'mask_{attr}_spin', None)
+                if spin:
+                    spin.setEnabled(False)
 
     def _on_mask_edit(self, key: str, value: int):
         """手动编辑遮罩数值（x/y/w/h直接修改）"""
@@ -1009,17 +1111,26 @@ class ParticlePanel(BaseToolPanel):
         idx = self.image_label.selected_mask_idx
         if 0 <= idx < len(self.image_label.masks):
             m = self.image_label.masks[idx]
-            cx = m['x'] + m['width'] // 2    # 中心X
-            cy = m['y'] + m['height'] // 2   # 中心Y
+            cx = m['x'] + m['width'] // 2
+            cy = m['y'] + m['height'] // 2
             if key == 'hw':
                 m['width'] = value * 2
                 m['x'] = cx - value
-            else:  # 'hh'
+            else:
                 m['height'] = value * 2
                 m['y'] = cy - value
             self.image_label._update_display()
             self._update_mask_list()
-            self._update_mask_edits()  # 同步 x/y/w/h
+            self._update_mask_edits()
+
+    def _on_segment_edit(self, key: str, value: int):
+        """分段编辑：设置分段W/2或H/2，视觉辅助（不影响遮罩边界）"""
+        idx = self.image_label.selected_mask_idx
+        if 0 <= idx < len(self.image_label.masks):
+            m = self.image_label.masks[idx]
+            m['seg_w'] = value if key == 'sw' else m.get('seg_w', m['width'] // 2)
+            m['seg_h'] = value if key == 'sh' else m.get('seg_h', m['height'] // 2)
+            self.image_label._update_display()
 
     # ---------- 遮罩保存/加载 ----------
 

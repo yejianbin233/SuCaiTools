@@ -350,6 +350,7 @@
   "gif_interval_select": "间隔勾选",
   "mask_edit": "遮罩编辑",
   "pivot_edit": "质点(中心对齐)",
+  "seg_edit": "分段(网格参考)",
   "play_frames": "播放序列帧",
   "play": "播放"
 }
