@@ -690,7 +690,7 @@ class ParticlePanel(BaseToolPanel):
         edit_grid.setSpacing(2)
         # X, Y, W, H 四行
         for row, (key, label) in enumerate([
-            ('x', 'X'), ('y', 'Y'), ('w', 'W'), ('h', 'H')
+            ('x', 'cent_X'), ('y', 'cent_Y'), ('w', 'W'), ('h', 'H')
         ]):
             lbl = QLabel(f"  {label}:")
             lbl.setFixedWidth(60)
