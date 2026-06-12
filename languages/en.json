@@ -311,5 +311,10 @@
   "gif_interval_select": "Interval Select",
   "mask_edit": "Mask Edit",
   "play_frames": "Play Frames",
-  "play": "Play"
+  "play": "Play",
+  "tab_file_distributor": "File Distributor",
+  "source_file": "Source File:",
+  "target_folder": "Target Folder:",
+  "scan_subdirs": "Scan Subfolders",
+  "start_distribute": "Start Distribute"
 }

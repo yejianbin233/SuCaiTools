@@ -33,6 +33,7 @@ from ui.rotate_panel import RotatePanel
 from ui.particle_panel import ParticlePanel
 from ui.caption_panel import CaptionPanel
 from ui.gif_maker_panel import GifMakerPanel
+from ui.file_distributor_panel import FileDistributorPanel
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         (ParticlePanel,        "tab_particle_extractor",  "粒子提取器"),
         (CaptionPanel,         "tab_caption_editor",      "Caption编辑器"),
         (GifMakerPanel,        "tab_gif_maker",           "GIF合成"),
+        (FileDistributorPanel, "tab_file_distributor",    "文件分发"),
     ]
 
     def __init__(self):
