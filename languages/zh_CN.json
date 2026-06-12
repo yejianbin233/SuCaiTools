@@ -359,6 +359,7 @@
   "target_folder": "目标文件夹:",
   "scan_subdirs": "扫描子文件夹",
   "start_distribute": "开始分发",
+  "overwrite": "覆盖已存在的文件",
   "play_frames": "播放序列帧",
   "play": "播放"
 }

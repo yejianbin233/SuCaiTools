@@ -316,5 +316,6 @@
   "source_file": "Source File:",
   "target_folder": "Target Folder:",
   "scan_subdirs": "Scan Subfolders",
-  "start_distribute": "Start Distribute"
+  "start_distribute": "Start Distribute",
+  "overwrite": "Overwrite existing files"
 }

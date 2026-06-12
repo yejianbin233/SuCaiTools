@@ -70,6 +70,10 @@ class FileDistributorPanel(BaseToolPanel):
         dst_layout.addWidget(self.dst_btn, 0, 2)
         layout.addWidget(dst_group)
 
+        # ---- 覆盖选项 ----
+        self.overwrite_check = QCheckBox()
+        layout.addWidget(self.overwrite_check)
+
         # ---- 操作按钮 ----
         action_layout = QHBoxLayout()
         self.scan_btn = QPushButton()
@@ -116,6 +120,7 @@ class FileDistributorPanel(BaseToolPanel):
         self.src_btn.setText(self.tr("browse"))
         self.dst_label.setText(self.tr("target_folder"))
         self.dst_btn.setText(self.tr("browse"))
+        self.overwrite_check.setText(self.tr("overwrite"))
         self.scan_btn.setText(self.tr("scan_subdirs"))
         self.execute_btn.setText(self.tr("start_distribute"))
         self.status_label.setText(self.tr("status_idle"))
@@ -168,26 +173,29 @@ class FileDistributorPanel(BaseToolPanel):
 
         subdirs.sort()
         self._pending_dirs = []
+        overwrite = self.overwrite_check.isChecked()
 
         self.log(f"源文件: {src_name}")
         self.log(f"目标文件夹: {dst}")
-        self.log(f"共找到 {len(subdirs)} 个子文件夹\n")
+        self.log(f"共找到 {len(subdirs)} 个子文件夹")
+        self.log(f"覆盖模式: {'是' if overwrite else '否'}\n")
 
         missing = 0
         exists = 0
         for sub in subdirs:
             dest_path = os.path.join(sub, src_name)
-            if os.path.exists(dest_path):
+            if os.path.exists(dest_path) and not overwrite:
                 exists += 1
                 self.log(f"  ✓ {os.path.basename(sub)}/  (已存在)")
             else:
                 missing += 1
                 self._pending_dirs.append(sub)
-                self.log(f"  → {os.path.basename(sub)}/  (待复制)")
+                tag = "覆盖" if os.path.exists(dest_path) else "待复制"
+                self.log(f"  → {os.path.basename(sub)}/  ({tag})")
 
-        self.log(f"\n扫描完成: {exists} 个已存在, {missing} 个待复制")
+        self.log(f"\n扫描完成: {exists} 个已存在, {missing} 个待处理")
         self.status_label.setText(
-            f"{missing} 个子文件夹需要复制文件")
+            f"{missing} 个子文件夹需要{'覆盖' if overwrite else '复制'}文件")
         self.execute_btn.setEnabled(missing > 0)
 
     # ---------- 执行 ----------
