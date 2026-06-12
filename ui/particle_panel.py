@@ -761,6 +761,12 @@ class ParticlePanel(BaseToolPanel):
             setattr(self, f'mask_{key}_spin', spin)
         right_layout.addLayout(edit_grid)
 
+        # 启用拆分（按网格拆分为子图片）
+        from PySide6.QtWidgets import QCheckBox
+        self.split_check = QCheckBox()
+        self.split_check.toggled.connect(self._on_split_toggled)
+        right_layout.addWidget(self.split_check)
+
         self.delete_mask_btn = QPushButton()
         self.delete_mask_btn.clicked.connect(self._delete_mask)
         self.delete_mask_btn.setMinimumHeight(30)
@@ -857,6 +863,7 @@ class ParticlePanel(BaseToolPanel):
         self.mask_edit_label.setText(self.tr("mask_edit"))
         self.pivot_label.setText(self.tr("pivot_edit"))
         self.seg_label.setText(self.tr("seg_edit"))
+        self.split_check.setText(self.tr("enable_split"))
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
@@ -1096,13 +1103,18 @@ class ParticlePanel(BaseToolPanel):
             self.mask_sh_spin.blockSignals(False)
             self.mask_hw_spin.setEnabled(True)
             self.mask_hh_spin.setEnabled(True)
+            self.split_check.blockSignals(True)
+            self.split_check.setChecked(m.get('split', False))
+            self.split_check.blockSignals(False)
             self.mask_sw_spin.setEnabled(True)
             self.mask_sh_spin.setEnabled(True)
+            self.split_check.setEnabled(True)
         else:
             for attr in ('x', 'y', 'w', 'h', 'hw', 'hh', 'sw', 'sh'):
                 spin = getattr(self, f'mask_{attr}_spin', None)
                 if spin:
                     spin.setEnabled(False)
+            self.split_check.setEnabled(False)
 
     def _on_mask_edit(self, key: str, value: int):
         """手动编辑遮罩数值（x/y/w/h直接修改）"""
@@ -1141,6 +1153,12 @@ class ParticlePanel(BaseToolPanel):
             m['seg_cols'] = value if key == 'sw' else m.get('seg_cols', 1)
             m['seg_rows'] = value if key == 'sh' else m.get('seg_rows', 1)
             self.image_label._update_display()
+
+    def _on_split_toggled(self, checked: bool):
+        """启用/禁用拆分"""
+        idx = self.image_label.selected_mask_idx
+        if 0 <= idx < len(self.image_label.masks):
+            self.image_label.masks[idx]['split'] = checked
 
     # ---------- 遮罩保存/加载 ----------
 
@@ -1247,7 +1265,9 @@ class ParticlePanel(BaseToolPanel):
                             from PIL import Image
                             filename = os.path.basename(img_path)
                             with Image.open(img_path) as img:
-                                for mask in maskdefs:
+                                for mi, mask in enumerate(maskdefs):
+                                    # 从原始dict获取split/segment参数
+                                    orig = self.image_label.masks[mi]
                                     left = max(0, mask.x)
                                     top = max(0, mask.y)
                                     right = min(img.width, mask.x + mask.width)
@@ -1255,10 +1275,28 @@ class ParticlePanel(BaseToolPanel):
                                     if right > left and bottom > top:
                                         cropped = img.crop((left, top, right, bottom))
                                         ext = os.path.splitext(img_path)[1]
-                                        out_path = os.path.join(
-                                            output_dir, mask.label,
-                                            os.path.splitext(filename)[0] + ext)
-                                        cropped.save(out_path)
+                                        base_name = os.path.splitext(filename)[0]
+                                        # 拆分模式：按行列拆分为子图
+                                        cols = orig.get('seg_cols', 1)
+                                        rows = orig.get('seg_rows', 1)
+                                        if orig.get('split') and (cols > 1 or rows > 1):
+                                            cw = cropped.width / cols
+                                            rh = cropped.height / rows
+                                            for r in range(rows):
+                                                for c_val in range(cols):
+                                                    x1 = int(c_val * cw)
+                                                    y1 = int(r * rh)
+                                                    x2 = int((c_val + 1) * cw)
+                                                    y2 = int((r + 1) * rh)
+                                                    sub = cropped.crop((x1, y1, x2, y2))
+                                                    sub.save(os.path.join(
+                                                        output_dir, mask.label,
+                                                        f"{base_name}_r{r}c{c_val}{ext}"))
+                                        else:
+                                            out_path = os.path.join(
+                                                output_dir, mask.label,
+                                                base_name + ext)
+                                            cropped.save(out_path)
                         except Exception as e:
                             slf.signals.log.emit(f"跳过 {img_path}: {e}")
                         slf.signals.progress.emit(idx + 1, total)
