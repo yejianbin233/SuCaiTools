@@ -348,6 +348,8 @@
   "gif_no_images": "未找到图片",
   "gif_select_first": "请先勾选要合成的图片",
   "gif_interval_select": "间隔勾选",
+  "preview_play": "▶ 预览",
+  "preview_stop": "⏸ 停止",
   "mask_edit": "遮罩编辑",
   "pivot_edit": "质点(中心对齐)",
   "seg_edit": "分段(网格参考)",

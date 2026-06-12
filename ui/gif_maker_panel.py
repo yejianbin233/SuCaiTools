@@ -33,6 +33,8 @@ class GifMakerPanel(BaseToolPanel):
         super().__init__(parent)
         self.folder_path: str = ""
         self.image_files: list[str] = []
+        self._preview_timer: QTimer | None = None
+        self._preview_idx: int = 0
         self._setup_ui()
 
         # 持久信号连接
@@ -185,6 +187,42 @@ class GifMakerPanel(BaseToolPanel):
         self.generate_btn.clicked.connect(self._generate_gif)
         settings_layout.addWidget(self.generate_btn)
 
+        # 预览区域
+        preview_group = QGroupBox()
+        preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setSpacing(4)
+
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(120)
+        self.preview_label.setStyleSheet("background-color: #e8e8e8; border: 1px solid #ccc;")
+        self.preview_label.setText("预览")
+        preview_layout.addWidget(self.preview_label)
+
+        preview_ctrl = QHBoxLayout()
+        self.preview_prev_btn = QPushButton("<")
+        self.preview_prev_btn.setFixedWidth(30)
+        self.preview_prev_btn.clicked.connect(self._preview_prev)
+        preview_ctrl.addWidget(self.preview_prev_btn)
+
+        self.preview_play_btn = QPushButton()
+        self.preview_play_btn.clicked.connect(self._toggle_preview)
+        preview_ctrl.addWidget(self.preview_play_btn)
+
+        self.preview_next_btn = QPushButton(">")
+        self.preview_next_btn.setFixedWidth(30)
+        self.preview_next_btn.clicked.connect(self._preview_next)
+        preview_ctrl.addWidget(self.preview_next_btn)
+
+        self.preview_counter = QLabel("0/0")
+        self.preview_counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_counter.setFixedWidth(50)
+        preview_ctrl.addWidget(self.preview_counter)
+
+        preview_ctrl.addStretch()
+        preview_layout.addLayout(preview_ctrl)
+        settings_layout.addWidget(preview_group)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         settings_layout.addWidget(self.progress_bar)
@@ -220,6 +258,7 @@ class GifMakerPanel(BaseToolPanel):
         self.interval_btn.setText(self.tr("gif_interval_select"))
         self.out_label.setText(self.tr("gif_output_name"))
         self.generate_btn.setText(self.tr("gif_generate"))
+        self.preview_play_btn.setText(self.tr("preview_play"))
         self.count_label.setText(self.tr("gif_no_images"))
 
     # ---------- 图片加载 ----------
@@ -310,6 +349,68 @@ class GifMakerPanel(BaseToolPanel):
             self.image_list.item(i).setCheckState(Qt.CheckState.Checked)
         self.image_list.itemChanged.connect(lambda: self._update_count())
         self._update_count()
+
+    # ---------- 预览播放 ----------
+
+    def _get_checked_files(self) -> list[str]:
+        """获取已勾选且可加载的图片路径列表（按列表顺序）"""
+        result = []
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                result.append(item.data(Qt.ItemDataRole.UserRole))
+        return result
+
+    def _toggle_preview(self):
+        """启动/停止预览播放"""
+        if self._preview_timer and self._preview_timer.isActive():
+            self._preview_timer.stop()
+            self.preview_play_btn.setText(self.tr("preview_play"))
+            return
+
+        checked = self._get_checked_files()
+        if not checked:
+            QMessageBox.information(self, self.tr("info_title"), "请先勾选图片")
+            return
+
+        if not self._preview_timer:
+            self._preview_timer = QTimer(self)
+            self._preview_timer.timeout.connect(self._preview_next)
+
+        self._preview_idx = 0
+        fps = self.fps_spin.value()
+        self._preview_timer.start(max(16, 1000 // fps))
+        self._show_preview_frame()
+        self.preview_play_btn.setText(self.tr("preview_stop"))
+
+    def _show_preview_frame(self):
+        """显示当前预览帧"""
+        checked = self._get_checked_files()
+        if not checked:
+            self._toggle_preview()
+            return
+        self._preview_idx = self._preview_idx % len(checked)
+        path = checked[self._preview_idx]
+        pixmap = QPixmap(path)
+        if not pixmap.isNull():
+            w = self.width_spin.value()
+            h = self.height_spin.value()
+            scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+            self.preview_label.setPixmap(scaled)
+        self.preview_counter.setText(f"{self._preview_idx + 1}/{len(checked)}")
+
+    def _preview_next(self):
+        checked = self._get_checked_files()
+        if checked:
+            self._preview_idx = (self._preview_idx + 1) % len(checked)
+            self._show_preview_frame()
+
+    def _preview_prev(self):
+        checked = self._get_checked_files()
+        if checked:
+            self._preview_idx = (self._preview_idx - 1) % len(checked)
+            self._show_preview_frame()
 
     # ---------- GIF生成 ----------
 
