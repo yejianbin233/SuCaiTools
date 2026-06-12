@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QTextEdit, QSpinBox,
     QProgressBar, QMessageBox, QFileDialog, QListWidget,
-    QListWidgetItem, QAbstractItemView, QSplitter
+    QListWidgetItem, QAbstractItemView, QSplitter, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QImage
@@ -122,8 +122,7 @@ class GifMakerPanel(BaseToolPanel):
 
         # 右侧：设置面板
         settings_panel = QWidget()
-        settings_panel.setMinimumWidth(200)
-        settings_panel.setMaximumWidth(280)
+        settings_panel.setMinimumWidth(250)
         settings_layout = QVBoxLayout(settings_panel)
         settings_layout.setSpacing(8)
 
@@ -194,10 +193,12 @@ class GifMakerPanel(BaseToolPanel):
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumHeight(120)
+        self.preview_label.setMinimumSize(100, 80)
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.preview_label.setScaledContents(True)
         self.preview_label.setStyleSheet("background-color: #e8e8e8; border: 1px solid #ccc;")
         self.preview_label.setText("预览")
-        preview_layout.addWidget(self.preview_label)
+        preview_layout.addWidget(self.preview_label, stretch=1)
 
         preview_ctrl = QHBoxLayout()
         self.preview_prev_btn = QPushButton("<")
@@ -234,8 +235,10 @@ class GifMakerPanel(BaseToolPanel):
 
         settings_layout.addStretch()
         splitter.addWidget(settings_panel)
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
 
         layout.addWidget(splitter, stretch=1)
 
@@ -397,7 +400,7 @@ class GifMakerPanel(BaseToolPanel):
         self.preview_play_btn.setText(self.tr("preview_stop"))
 
     def _show_preview_frame(self):
-        """显示当前预览帧"""
+        """显示当前预览帧（自动缩放适配预览区域）"""
         checked = self._get_checked_files()
         if not checked:
             self._toggle_preview()
@@ -406,11 +409,7 @@ class GifMakerPanel(BaseToolPanel):
         path = checked[self._preview_idx]
         pixmap = QPixmap(path)
         if not pixmap.isNull():
-            w = self.width_spin.value()
-            h = self.height_spin.value()
-            scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio,
-                                   Qt.TransformationMode.SmoothTransformation)
-            self.preview_label.setPixmap(scaled)
+            self.preview_label.setPixmap(pixmap)
         self.preview_counter.setText(f"{self._preview_idx + 1}/{len(checked)}")
 
     def _preview_next(self):
