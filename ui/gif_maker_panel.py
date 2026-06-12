@@ -445,8 +445,6 @@ class GifMakerPanel(BaseToolPanel):
 
         # 参数
         fps = self.fps_spin.value()
-        width = self.width_spin.value()
-        height = self.height_spin.value()
         loop = self.loop_spin.value()
 
         self.generate_btn.setEnabled(False)
@@ -457,20 +455,42 @@ class GifMakerPanel(BaseToolPanel):
         def run():
             try:
                 from PIL import Image
+                # 第一遍：确定最大尺寸
+                max_w, max_h = 0, 0
+                for path in selected:
+                    with Image.open(path) as img:
+                        max_w = max(max_w, img.width)
+                        max_h = max(max_h, img.height)
+                self._gif_progress.emit(f"输出尺寸: {max_w}×{max_h} (以最大图片为基准)")
+
                 frames = []
                 total = len(selected)
 
                 for idx, path in enumerate(selected):
                     with Image.open(path) as img:
+                        # 转换为RGB
                         if img.mode == 'RGBA':
-                            # 转RGB（GIF不支持透明）
-                            background = Image.new('RGB', img.size, (255, 255, 255))
-                            background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                            img = background
+                            bg = Image.new('RGB', (max_w, max_h), (255, 255, 255))
+                            # 居中粘贴
+                            ox = (max_w - img.width) // 2
+                            oy = (max_h - img.height) // 2
+                            alpha = img.split()[3] if len(img.split()) > 3 else None
+                            bg.paste(img, (ox, oy), alpha)
+                            img = bg
                         elif img.mode != 'RGB':
                             img = img.convert('RGB')
-                        if img.size != (width, height):
-                            img = img.resize((width, height), Image.Resampling.LANCZOS)
+                            if img.size != (max_w, max_h):
+                                bg = Image.new('RGB', (max_w, max_h), (255, 255, 255))
+                                ox = (max_w - img.width) // 2
+                                oy = (max_h - img.height) // 2
+                                bg.paste(img, (ox, oy))
+                                img = bg
+                        elif img.size != (max_w, max_h):
+                            bg = Image.new('RGB', (max_w, max_h), (255, 255, 255))
+                            ox = (max_w - img.width) // 2
+                            oy = (max_h - img.height) // 2
+                            bg.paste(img, (ox, oy))
+                            img = bg
                         frames.append(img.copy())
 
                     self._gif_progress.emit(f"处理中... {idx + 1}/{total}")

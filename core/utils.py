@@ -96,3 +96,14 @@ def get_supported_image_files(directory: str) -> list[str]:
         files.extend(str(p) for p in dir_path.glob(f"*{ext.upper()}"))
 
     return sorted(set(files))
+
+
+import re as _re
+
+def natural_sort_key(name: str):
+    """自然排序键：将文件名中的数字按数值排序，而非字符串排序。
+
+    示例: "r0c1" < "r0c8" < "r0c11" (而非 "r0c1" < "r0c11" < "r0c8")
+    """
+    return [int(t) if t.isdigit() else t.lower()
+            for t in _re.split(r'(\d+)', name)]
