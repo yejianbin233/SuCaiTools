@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer, QSize, QObject
 from PySide6.QtGui import QPixmap, QIcon
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropFolderLineEdit
+from core.utils import DragDropFolderLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
 
 
@@ -290,7 +290,7 @@ class CaptionPanel(BaseToolPanel):
         # 扫描图片文件
         supported = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff')
         image_files = []
-        for f in sorted(os.listdir(folder)):
+        for f in sorted(os.listdir(folder), key=natural_sort_key):
             if f.lower().endswith(supported):
                 image_files.append(os.path.join(folder, f))
 
@@ -634,7 +634,7 @@ class CaptionPanel(BaseToolPanel):
             img_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
             pairs = []
             for root, _, files in os.walk(folder):
-                for f in sorted(files):
+                for f in sorted(files, key=natural_sort_key):
                     if not f.endswith('.txt') or f.endswith('_en.txt'):
                         continue
                     base = os.path.splitext(f)[0]

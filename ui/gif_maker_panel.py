@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QImage
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropFolderLineEdit
+from core.utils import DragDropFolderLineEdit, natural_sort_key
 
 
 class GifMakerPanel(BaseToolPanel):
@@ -275,7 +275,7 @@ class GifMakerPanel(BaseToolPanel):
 
         supported = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff')
         files = []
-        for f in sorted(os.listdir(folder)):
+        for f in sorted(os.listdir(folder), key=natural_sort_key):
             if f.lower().endswith(supported):
                 files.append(os.path.join(folder, f))
 

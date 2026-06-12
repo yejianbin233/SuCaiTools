@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThreadPool
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropFolderLineEdit
+from core.utils import DragDropFolderLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
 
 
@@ -37,7 +37,7 @@ class RenameWorker(BaseWorker):
                     if f.lower().endswith(supported):
                         all_files.append(os.path.join(root, f))
         else:
-            for f in sorted(os.listdir(self.folder_path)):
+            for f in sorted(os.listdir(self.folder_path), key=natural_sort_key):
                 if f.lower().endswith(supported):
                     all_files.append(os.path.join(self.folder_path, f))
 

@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 )
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropFolderLineEdit, DragDropLineEdit
+from core.utils import DragDropFolderLineEdit, DragDropLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
 
 # 遮罩颜色调色板（与旧版 particle_extractor_gui.py 保持一致）
@@ -883,7 +883,7 @@ class ParticlePanel(BaseToolPanel):
 
         supported = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
         files = []
-        for f in sorted(os.listdir(folder)):
+        for f in sorted(os.listdir(folder), key=natural_sort_key):
             if f.lower().endswith(supported):
                 files.append(os.path.join(folder, f))
 

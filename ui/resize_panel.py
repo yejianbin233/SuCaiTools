@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThreadPool
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropFolderLineEdit
+from core.utils import DragDropFolderLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
 
 
@@ -38,7 +38,7 @@ class ResizeWorker(BaseWorker):
 
         supported = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
         image_files = []
-        for f in sorted(os.listdir(self.input_dir)):
+        for f in sorted(os.listdir(self.input_dir), key=natural_sort_key):
             if f.lower().endswith(supported):
                 image_files.append(os.path.join(self.input_dir, f))
 

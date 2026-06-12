@@ -16,7 +16,7 @@ from PySide6.QtCore import QThreadPool
 from PySide6.QtGui import QPixmap
 
 from core.base_panel import BaseToolPanel
-from core.utils import DragDropLineEdit, DragDropFolderLineEdit
+from core.utils import DragDropLineEdit, DragDropFolderLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
 
 
@@ -35,7 +35,7 @@ class ImageProcWorker(BaseWorker):
 
         supported = ('.png', '.jpg', '.jpeg', '.bmp')
         image_files = []
-        for f in sorted(os.listdir(self.folder_path)):
+        for f in sorted(os.listdir(self.folder_path), key=natural_sort_key):
             if f.lower().endswith(supported):
                 image_files.append(os.path.join(self.folder_path, f))
 
