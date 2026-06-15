@@ -1,4 +1,8 @@
-__pycache__/
+.git/
+./github
+./venv
+_pycache_
+pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -27,3 +31,6 @@ var/
 # Project specific
 config.json
 caption/tentcent_secretkey.json
+
+.claude/
+.claude-dock/

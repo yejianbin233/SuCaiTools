@@ -34,6 +34,7 @@ from ui.particle_panel import ParticlePanel
 from ui.caption_panel import CaptionPanel
 from ui.gif_maker_panel import GifMakerPanel
 from ui.file_distributor_panel import FileDistributorPanel
+from ui.anythingllm_upload_panel import AnythingLLMUploadPanel
 
 
 class MainWindow(QMainWindow):
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         (CaptionPanel,         "tab_caption_editor",      "Caption编辑器"),
         (GifMakerPanel,        "tab_gif_maker",           "GIF合成"),
         (FileDistributorPanel, "tab_file_distributor",    "文件分发"),
+        (AnythingLLMUploadPanel, "tab_anythingllm_upload", "AnythingLLM上传"),
     ]
 
     def __init__(self):
