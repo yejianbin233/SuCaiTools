@@ -9,6 +9,7 @@ AnythingLLM 批量文件上传工具面板
 """
 
 import os
+import json
 import requests
 from pathlib import Path
 
@@ -189,6 +190,54 @@ _AUTO_EXCLUDE_SUFFIXES = frozenset({
 
 _SCAN_BATCH_SIZE = 80
 _LIST_FLUSH_BATCHES = 5
+_TRACKING_FILE = ".allm_track.json"
+
+
+def _load_tracking(folder: str) -> dict:
+    """加载追踪文件，key 为 rel_path，value 为 {name, size, mtime}"""
+    path = os.path.join(folder, _TRACKING_FILE)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_tracking(folder: str, data: dict):
+    """保存追踪文件"""
+    path = os.path.join(folder, _TRACKING_FILE)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _delete_documents(base_url: str, api_key: str,
+                      names: list[str]) -> tuple[int, int]:
+    """调用 DELETE /api/system/remove-documents 删除文档
+
+    返回 (deleted, failed) 计数。
+    """
+    if not names:
+        return 0, 0
+    base = base_url.rstrip('/')
+    try:
+        resp = requests.delete(
+            f"{base}/api/system/remove-documents",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"names": names},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            result = resp.json()
+            if result.get("success"):
+                return len(names), 0
+        return 0, len(names)
+    except Exception:
+        return 0, len(names)
 
 
 def _normalize_location(raw: str) -> str:
@@ -237,6 +286,11 @@ class ScanFolderWorker(BaseWorker):
             if not file_path.is_file():
                 continue
 
+            # 排除追踪文件自身
+            if file_path.name == _TRACKING_FILE:
+                filtered += 1
+                continue
+
             # 自动排除：目录名匹配
             if _AUTO_EXCLUDE_DIRS.intersection(file_path.parts):
                 filtered += 1
@@ -252,15 +306,19 @@ class ScanFolderWorker(BaseWorker):
                 continue
 
             try:
-                size = file_path.stat().st_size
+                st = file_path.stat()
+                size = st.st_size
+                mtime = st.st_mtime
             except OSError:
                 size = 0
+                mtime = 0
 
             count += 1
             batch.append({
                 'abs_path': str(file_path),
                 'rel_path': str(file_path.relative_to(base)),
                 'size': size,
+                'mtime': mtime,
             })
 
             if len(batch) >= _SCAN_BATCH_SIZE:
@@ -292,29 +350,43 @@ class ScanFolderWorker(BaseWorker):
 class AnythingLLMUploadWorker(BaseWorker):
     """逐个上传文件到 AnythingLLM 并添加到工作区
 
-    根据文件的相对目录路径，自动映射到 AnythingLLM 的文件夹结构。
+    对已修改的文件先删除旧版本再上传新版本，实现增量同步。
     """
 
     def __init__(self, files: list[dict], base_url: str, api_key: str,
-                 workspace: str):
+                 workspace: str, old_docs: dict[str, str] | None = None):
         """
         参数:
-            files: [{'abs_path': ..., 'rel_dir': ...}, ...]
-                   rel_dir 为相对目录路径（空字符串 = 根目录）
+            files: [{'abs_path': ..., 'rel_dir': ..., 'rel_path': ...}, ...]
+            old_docs: {rel_path: old_doc_name}  需要先删除的旧文档
         """
         super().__init__()
         self.files = files
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.workspace = workspace
+        self.old_docs = old_docs or {}
 
     def run(self):
         total = len(self.files)
         uploaded = 0
         failed = 0
         doc_locations: list[str] = []
-
+        new_tracking: dict[str, dict] = {}
         headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        # 批量删除旧文档（修改过的文件）
+        old_names = list(self.old_docs.values())
+        if old_names:
+            self.signals.log.emit(
+                f"\n清理 {len(old_names)} 个旧版本文档...")
+            deleted, del_failed = _delete_documents(
+                self.base_url, self.api_key, old_names)
+            if deleted > 0:
+                self.signals.log.emit(f"  ✓ 已删除 {deleted} 个旧版本")
+            if del_failed > 0:
+                self.signals.log.emit(
+                    f"  ⚠ {del_failed} 个旧版本删除失败（将尝试覆盖上传）")
 
         for idx, finfo in enumerate(self.files):
             if self._stop_flag:
@@ -322,14 +394,22 @@ class AnythingLLMUploadWorker(BaseWorker):
 
             file_path = finfo['abs_path']
             rel_dir = finfo.get('rel_dir', '')
+            rel_path = finfo.get('rel_path', '')
             filename = os.path.basename(file_path)
+            status = finfo.get('status', '')
+
+            # 标签
+            tag = ""
+            if status == "modified":
+                tag = " [更新]"
+            elif status == "new":
+                tag = " [新增]"
 
             try:
-                # 有子目录 → 用根 URL + folder 表单字段（桌面版支持此方式）
                 if rel_dir:
                     upload_url = f"{self.base_url}/api/v1/document/upload"
                     self.signals.log.emit(
-                        f"[{idx + 1}/{total}] 上传: {filename} → {rel_dir}")
+                        f"[{idx + 1}/{total}] 上传{tag}: {filename} → {rel_dir}")
                     with open(file_path, 'rb') as f:
                         resp = requests.post(
                             upload_url,
@@ -341,7 +421,7 @@ class AnythingLLMUploadWorker(BaseWorker):
                 else:
                     upload_url = f"{self.base_url}/api/v1/document/upload"
                     self.signals.log.emit(
-                        f"[{idx + 1}/{total}] 上传中: {filename}")
+                        f"[{idx + 1}/{total}] 上传{tag}: {filename}")
                     with open(file_path, 'rb') as f:
                         resp = requests.post(
                             upload_url,
@@ -392,6 +472,22 @@ class AnythingLLMUploadWorker(BaseWorker):
                 if location:
                     location = _normalize_location(location)
                     doc_locations.append(location)
+
+                # 构建追踪条目
+                if rel_path:
+                    try:
+                        mtime = os.path.getmtime(file_path)
+                    except OSError:
+                        mtime = 0
+                    try:
+                        size = os.path.getsize(file_path)
+                    except OSError:
+                        size = 0
+                    new_tracking[rel_path] = {
+                        "name": location,
+                        "size": size,
+                        "mtime": mtime,
+                    }
 
                 uploaded += 1
                 self.signals.log.emit(
@@ -448,7 +544,8 @@ class AnythingLLMUploadWorker(BaseWorker):
             'success': uploaded > 0,
             'uploaded': uploaded,
             'failed': failed,
-            'locations': doc_locations
+            'locations': doc_locations,
+            'tracking': new_tracking,
         })
 
 
@@ -474,6 +571,13 @@ class AnythingLLMUploadPanel(BaseToolPanel):
 
         self._scan_buffer: list[dict] = []
         self._batches_since_flush: int = 0
+
+        # 增量同步：{rel_path: {name, size, mtime}}
+        self._tracking: dict = {}
+        # 当前扫描文件的元数据缓存：{rel_path: {size, mtime}}
+        self._track_data: dict[str, dict] = {}
+        # 本地已删除的文件：{rel_path: doc_name}（上传时从 AnythingLLM 中删除）
+        self._deleted_docs: dict[str, str] = {}
 
         super().__init__(parent)
         self._setup_ui()
@@ -521,7 +625,7 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         self.apikey_entry.setEchoMode(QLineEdit.EchoMode.Password)
         self.apikey_entry.setPlaceholderText("输入 AnythingLLM API Key...")
         self.apikey_entry.textChanged.connect(
-            lambda: self._update_upload_btn())
+            lambda: (self._update_upload_btn(), self._update_sync_btn()))
         config_layout.addWidget(self.apikey_entry, 1, 1)
         self.workspace_label = QLabel()
         config_layout.addWidget(self.workspace_label, 2, 0)
@@ -641,6 +745,16 @@ class AnythingLLMUploadPanel(BaseToolPanel):
 
         # ---- 操作栏 ----
         action_layout = QHBoxLayout()
+        self.sync_btn = QPushButton()
+        self.sync_btn.setStyleSheet(
+            "QPushButton { background-color: #d83b01; color: white; "
+            "padding: 6px 16px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #ea4a12; }"
+            "QPushButton:disabled { background-color: #d0d0d0; color: #888; }")
+        self.sync_btn.clicked.connect(self._start_sync)
+        self.sync_btn.setEnabled(False)
+        self.sync_btn.setToolTip("只清理 AnythingLLM 中的无效文档，不上传文件")
+        action_layout.addWidget(self.sync_btn)
         self.upload_btn = QPushButton()
         self.upload_btn.setStyleSheet(
             "QPushButton { background-color: #107c10; color: white; "
@@ -687,6 +801,7 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         self.collapse_all_btn.setText(self.tr("allm_collapse_all"))
         self.select_all_right_btn.setText(self.tr("allm_select_all"))
         self.remove_btn.setText(self.tr("allm_remove_selected"))
+        self.sync_btn.setText(self.tr("allm_sync"))
         self.upload_btn.setText(self.tr("allm_start_upload"))
         self.status_label.setText(self.tr("status_idle"))
         self._update_list_labels()
@@ -717,12 +832,20 @@ class AnythingLLMUploadPanel(BaseToolPanel):
 
         self._auto_load_gitignore(Path(folder))
 
-        # 清空树和缓冲区
+        # 加载追踪文件，用于自动跳过未变化文件
+        self._tracking = _load_tracking(folder)
+        self._auto_skipped = 0
+        self._new_count = 0
+        self._modified_count = 0
+        self._not_uploaded_count = 0
+
+        # 清空树、缓冲区和元数据缓存
         self.left_tree.clear()
         self.right_tree.clear()
         self._source_files.clear()
         self._pending_files.clear()
         self._scan_buffer.clear()
+        self._track_data.clear()
         self._batches_since_flush = 0
 
         self.set_processing(True)
@@ -736,10 +859,45 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         QThreadPool.globalInstance().start(self.scan_worker)
 
     def _on_file_found(self, batch: list):
-        """每批次回调 — 日志实时输出，文件累积到缓冲区"""
-        self._scan_buffer.extend(batch)
+        """每批次回调 — 智能跳过：已上传 + 未变化 → 跳过；未上传 → 显示"""
+        filtered_batch = []
         for f_info in batch:
+            rel = f_info['rel_path'].replace('\\', '/')
+            size = f_info['size']
+            mtime = f_info.get('mtime', 0)
+
+            self._track_data[rel] = {'size': size, 'mtime': mtime}
+
+            old = self._tracking.get(rel) if self._tracking else None
+
+            if old is not None:
+                # 已在追踪中，检查是否变化
+                if (old.get('size') == size and
+                        old.get('mtime') == mtime):
+                    # 未变化，但只有已上传的才自动跳过
+                    if old.get('name'):
+                        self._auto_skipped += 1
+                        continue
+                    # 未上传过 → 仍显示在来源树（状态：待上传）
+                    self._source_files.add(f_info['abs_path'])
+                    self._not_uploaded_count += 1
+                    filtered_batch.append(f_info)
+                    continue
+                # 已变化 → 修改
+                self._source_files.add(f_info['abs_path'])
+                self._modified_count += 1
+                filtered_batch.append(f_info)
+                continue
+
+            # 全新文件
             self._source_files.add(f_info['abs_path'])
+            self._new_count += 1
+            filtered_batch.append(f_info)
+
+        if not filtered_batch:
+            return
+
+        self._scan_buffer.extend(filtered_batch)
 
         self._batches_since_flush += 1
         total = len(self._scan_buffer)
@@ -781,13 +939,102 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         count = result.get('count', 0)
         filtered = result.get('filtered', 0)
 
-        if filtered > 0:
-            self.log(f"已过滤 {filtered} 个被忽略的文件")
-        self.log(f"扫描完成: {count} 个文件")
+        # 检测本地已删除的文件（追踪中有但本次扫描没出现）
+        self._deleted_docs = {}
+        deleted_no_name = 0
+        if self._tracking:
+            for rel_path, info in self._tracking.items():
+                if rel_path not in self._track_data:
+                    name = info.get('name', '')
+                    if name:
+                        self._deleted_docs[rel_path] = name
+                    else:
+                        deleted_no_name += 1
+            # 诊断日志：追踪 vs 扫描的条目数
+            self.log(f"  [诊断] 追踪条目: {len(self._tracking)}, "
+                     f"本次扫描条目: {len(self._track_data)}, "
+                     f"差异: {len(self._tracking) - len(self._track_data)}")
+
+        # 保存全量追踪：所有扫描到的文件 + 保留已有 name
+        self._save_full_tracking()
+
+        # 给树节点染色
+        self._color_tree_by_status(self.left_tree)
+
+        # 日志摘要
+        parts = [f"扫描完成: {count} 个文件"]
+        if self._auto_skipped:
+            parts.append(f"跳过 {self._auto_skipped} 个(已上传且未变)")
+        if self._not_uploaded_count:
+            parts.append(f"待上传 {self._not_uploaded_count} 个(追踪中但未上传)")
+        if self._new_count:
+            parts.append(f"新增 {self._new_count}")
+        if self._modified_count:
+            parts.append(f"已修改 {self._modified_count}")
+        if self._deleted_docs:
+            parts.append(f"将删除 {len(self._deleted_docs)} 个(本地已删)")
+        if deleted_no_name:
+            parts.append(f"追踪移除 {deleted_no_name} 个(本地已删,未上传)")
+        if filtered:
+            parts.insert(0, f"已过滤 {filtered} 个")
+        self.log("，".join(parts))
         self.status_label.setText(
             self.tr("allm_scan_done").format(count=count))
         self._update_list_labels()
         self._update_upload_btn()
+
+    def _save_full_tracking(self):
+        """更新追踪文件：已存在的文件更新 size/mtime，新增文件追加，
+        已删除文件的条目保留不动（由同步/上传时清理）。
+        """
+        if not self.folder_path:
+            return
+        # 基于现有追踪 + 本次扫描数据合并
+        merged = dict(self._tracking)  # 保留所有旧条目（含已删除的）
+        for rel_path, td in self._track_data.items():
+            old = self._tracking.get(rel_path, {}) if self._tracking else {}
+            entry = {'size': td['size'], 'mtime': td['mtime']}
+            name = old.get('name', '')
+            if name:
+                entry['name'] = name
+            merged[rel_path] = entry  # 更新或新增
+        self._tracking = merged
+        _save_tracking(self.folder_path, self._tracking)
+
+    def _color_tree_by_status(self, tree: QTreeWidget):
+        """根据追踪文件对比结果给树节点染色"""
+        def _walk(item: QTreeWidgetItem):
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            if path:
+                rel = None
+                try:
+                    rel = os.path.relpath(path, self.folder_path)
+                except ValueError:
+                    pass
+                if rel:
+                    rel = rel.replace('\\', '/')
+                    old = self._tracking.get(rel) if self._tracking else None
+                    td = self._track_data.get(rel, {})
+                    if old is None:
+                        status = "new"
+                        item.setForeground(0, Qt.GlobalColor.darkGreen)
+                    elif not old.get('name'):
+                        # 追踪中有记录但未上传过 → 待上传
+                        status = "not_uploaded"
+                        item.setForeground(0, Qt.GlobalColor.darkCyan)
+                    elif (old.get('size') != td.get('size', -1) or
+                          old.get('mtime') != td.get('mtime', -1)):
+                        status = "modified"
+                        item.setForeground(0, Qt.GlobalColor.darkYellow)
+                    else:
+                        status = "unchanged"
+                    item.setData(0, Qt.ItemDataRole.UserRole + 1, status)
+            for i in range(item.childCount()):
+                _walk(item.child(i))
+
+        root = tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            _walk(root.child(i))
 
     # ---------- 树操作：构建文件夹层级 ----------
 
@@ -998,8 +1245,8 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         try:
             # 单次遍历批量移除
             self._remove_files_from_tree(self.left_tree, valid_paths)
-            # 批量插入到目标树
             self._insert_files_into_tree(self.right_tree, moved)
+            self._color_tree_by_status(self.right_tree)
         finally:
             self.left_tree.setAnimated(True)
             self.right_tree.setAnimated(True)
@@ -1040,6 +1287,7 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         try:
             self._remove_files_from_tree(self.right_tree, valid_paths)
             self._insert_files_into_tree(self.left_tree, moved)
+            self._color_tree_by_status(self.left_tree)
         finally:
             self.left_tree.setAnimated(True)
             self.right_tree.setAnimated(True)
@@ -1094,13 +1342,114 @@ class AnythingLLMUploadPanel(BaseToolPanel):
             f"{self.tr('allm_pending_files')} "
             f"({self.right_tree.file_count()})")
 
+    def _update_sync_btn(self):
+        """同步按钮：有本地删除 或 右侧有已修改文件时才启用"""
+        has_api_key = bool(self.apikey_entry.text().strip())
+        can_sync = (bool(self._deleted_docs) or
+                    self._has_modified_in_right_tree())
+        self.sync_btn.setEnabled(
+            can_sync and has_api_key and not self.is_processing)
+
+    def _has_modified_in_right_tree(self) -> bool:
+        """检查右侧树中是否有已修改的文件（有待删除的旧版本）"""
+        def _walk(item: QTreeWidgetItem) -> bool:
+            status = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if status == 'modified':
+                return True
+            for i in range(item.childCount()):
+                if _walk(item.child(i)):
+                    return True
+            return False
+        root = self.right_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            if _walk(root.child(i)):
+                return True
+        return False
+
     def _update_upload_btn(self):
         has_pending = self.right_tree.file_count() > 0
         has_api_key = bool(self.apikey_entry.text().strip())
         self.upload_btn.setEnabled(
             has_pending and has_api_key and not self.is_processing)
+        self._update_sync_btn()
 
-    # ---------- 上传 ----------
+    # ---------- 同步（仅清理，不上传） ----------
+
+    def _start_sync(self):
+        """只删除 AnythingLLM 中的无效文档，不上传文件"""
+        api_key = self.apikey_entry.text().strip()
+        base_url = self.url_entry.text().strip()
+
+        if not api_key:
+            self.show_error(self.tr("error_title"), "请输入 API Key")
+            return
+        if not base_url:
+            self.show_error(self.tr("error_title"),
+                            "请输入 AnythingLLM 服务地址")
+            return
+
+        # 收集需要删除的文档：本地已删除 + 右侧已修改文件的旧版本
+        docs_to_delete: dict[str, str] = dict(self._deleted_docs)
+
+        # 加上右侧树中已修改文件的旧版本
+        def _collect_modified(item: QTreeWidgetItem):
+            status = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            if status == 'modified' and path:
+                try:
+                    rel = os.path.relpath(path, self.folder_path)
+                except ValueError:
+                    rel = os.path.basename(path)
+                rel = rel.replace('\\', '/')
+                old = (self._tracking.get(rel, {})
+                       if self._tracking else {})
+                old_name = old.get('name', '')
+                if old_name and rel not in docs_to_delete:
+                    docs_to_delete[rel] = old_name
+            for i in range(item.childCount()):
+                _collect_modified(item.child(i))
+
+        root = self.right_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            _collect_modified(root.child(i))
+
+        if not docs_to_delete:
+            QMessageBox.information(
+                self, self.tr("info_title"),
+                "没有需要清理的文档。")
+            return
+
+        self.set_processing(True)
+        self.sync_btn.setEnabled(False)
+        self.upload_btn.setEnabled(False)
+        self.log_area.clear()
+
+        self.log(f"开始同步: 清理 {len(docs_to_delete)} 个无效文档")
+        self.log(f"  - 本地已删除: {len(self._deleted_docs)} 个")
+        self.log(f"  - 旧版本: {len(docs_to_delete) - len(self._deleted_docs)} 个")
+
+        deleted, failed = _delete_documents(
+            base_url, api_key, list(docs_to_delete.values()))
+
+        if deleted > 0:
+            self.log(f"✓ 已清理 {deleted} 个文档")
+        if failed > 0:
+            self.log(f"✗ {failed} 个清理失败")
+
+        # 更新追踪文件
+        if self.folder_path:
+            for rel_path in docs_to_delete:
+                self._tracking.pop(rel_path, None)
+            _save_tracking(self.folder_path, self._tracking)
+
+        self._deleted_docs.clear()
+        self.set_processing(False)
+        self._update_upload_btn()
+
+        self.log("同步完成")
+        QMessageBox.information(
+            self, self.tr("info_title"),
+            f"同步完成!\n清理: {deleted}\n失败: {failed}")
 
     def _start_upload(self):
         api_key = self.apikey_entry.text().strip()
@@ -1117,23 +1466,68 @@ class AnythingLLMUploadPanel(BaseToolPanel):
 
         files_to_upload = self._collect_all_file_infos(
             self.right_tree, self.folder_path)
-        if not files_to_upload:
-            self.show_error(self.tr("error_title"), "待上传列表为空")
+
+        # 附加 rel_path 和状态信息
+        old_docs: dict[str, str] = {}
+        for finfo in files_to_upload:
+            abs_path = finfo['abs_path']
+            try:
+                rel_path = os.path.relpath(abs_path, self.folder_path)
+            except ValueError:
+                rel_path = os.path.basename(abs_path)
+            rel_path = rel_path.replace('\\', '/')
+            finfo['rel_path'] = rel_path
+
+            # 查找旧文档
+            old = self._tracking.get(rel_path) if self._tracking else None
+            td = self._track_data.get(rel_path, {})
+            if old is None:
+                finfo['status'] = 'new'
+            elif not old.get('name'):
+                # 追踪中有记录但未上传 → 按新增处理
+                finfo['status'] = 'new'
+            elif (old.get('size') != td.get('size', -1) or
+                  old.get('mtime') != td.get('mtime', -1)):
+                finfo['status'] = 'modified'
+                old_docs[rel_path] = old['name']
+            else:
+                finfo['status'] = 'unchanged'
+
+        # 跳过未变化的文件
+        skipped = sum(1 for f in files_to_upload
+                      if f.get('status') == 'unchanged')
+        files_to_upload = [f for f in files_to_upload
+                           if f.get('status') != 'unchanged']
+
+        # 合并本地已删除的文件到删除列表
+        if self._deleted_docs:
+            old_docs.update(self._deleted_docs)
+
+        if not files_to_upload and not old_docs:
+            self.log("所有文件均为最新，无需上传")
+            QMessageBox.information(
+                self, self.tr("info_title"),
+                f"所有文件均为最新，无需上传。\n跳过了 {skipped} 个未变化文件。")
             return
 
         self.set_processing(True)
         self.upload_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(len(files_to_upload))
+        self.progress_bar.setMaximum(max(len(files_to_upload), 1))
         self.progress_bar.setValue(0)
         self.log_area.clear()
 
-        self.log(f"开始上传 {len(files_to_upload)} 个文件...")
+        parts = []
+        if files_to_upload:
+            parts.append(f"上传 {len(files_to_upload)} 个文件")
+        if self._deleted_docs:
+            parts.append(f"清理 {len(self._deleted_docs)} 个已删除")
+        self.log(f"开始同步: {' + '.join(parts)}")
         self.log(f"服务地址: {base_url}")
         self.log(f"工作区: {workspace}")
 
         self.worker = AnythingLLMUploadWorker(
-            files_to_upload, base_url, api_key, workspace)
+            files_to_upload, base_url, api_key, workspace, old_docs)
         self.worker.signals.progress.connect(self._on_progress)
         self.worker.signals.log.connect(self._on_log)
         self.worker.signals.error.connect(self._on_error)
@@ -1157,19 +1551,42 @@ class AnythingLLMUploadPanel(BaseToolPanel):
         uploaded = result.get('uploaded', 0)
         failed = result.get('failed', 0)
 
-        msg_parts = [self.tr("allm_upload_done")]
-        if uploaded > 0:
-            msg_parts.append(f"✓ {uploaded}")
-        if failed > 0:
-            msg_parts.append(f"✗ {failed}")
-        self.status_label.setText("  ".join(msg_parts))
+        # 补充已上传文件的 name 到追踪
+        deleted_cleaned = len(self._deleted_docs)
+        if self.folder_path:
+            # 移除已删除的条目
+            for rel_path in self._deleted_docs:
+                self._tracking.pop(rel_path, None)
+            # 补充新上传文件的 name
+            new_tracking = result.get('tracking', {})
+            for rel_path, entry in new_tracking.items():
+                if rel_path in self._tracking:
+                    self._tracking[rel_path]['name'] = entry['name']
+            _save_tracking(self.folder_path, self._tracking)
+            if new_tracking:
+                self.log(f"追踪文件已更新: {len(new_tracking)} 个文档名")
 
-        self.log(f"\n上传完成: 成功 {uploaded}, 失败 {failed}")
+        self._deleted_docs.clear()
+
+        # 状态
+        if uploaded == 0 and failed == 0 and deleted_cleaned > 0:
+            self.log(f"同步完成: 清理了 {deleted_cleaned} 个已删除文档")
+            self.status_label.setText(
+                f"已清理 {deleted_cleaned} 个文档")
+        else:
+            msg_parts = [self.tr("allm_upload_done")]
+            if uploaded > 0:
+                msg_parts.append(f"✓ {uploaded}")
+            if failed > 0:
+                msg_parts.append(f"✗ {failed}")
+            self.status_label.setText("  ".join(msg_parts))
+            self.log(f"\n上传完成: 成功 {uploaded}, 失败 {failed}")
+
         self._update_upload_btn()
 
         QMessageBox.information(
             self, self.tr("info_title"),
-            f"上传完成!\n成功: {uploaded}\n失败: {failed}")
+            f"同步完成!\n成功: {uploaded}\n失败: {failed}")
 
 
 # ============================================================

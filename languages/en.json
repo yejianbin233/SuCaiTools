@@ -332,6 +332,7 @@
   "allm_source_files": "Source Files",
   "allm_pending_files": "Pending Upload",
   "allm_select_all": "Select All",
+  "allm_sync": "Sync Cleanup",
   "allm_deselect_all": "Deselect All",
   "allm_remove_selected": "Remove",
   "allm_expand_all": "Expand All",

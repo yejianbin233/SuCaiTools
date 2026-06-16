@@ -376,6 +376,7 @@
   "allm_source_files": "来源文件",
   "allm_pending_files": "待上传文件",
   "allm_select_all": "全选",
+  "allm_sync": "同步清理",
   "allm_deselect_all": "取消全选",
   "allm_remove_selected": "移除",
   "allm_expand_all": "展开全部",
