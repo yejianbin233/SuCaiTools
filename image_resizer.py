@@ -1,26 +1,59 @@
-import os
-from PIL import Image
-import os
+"""
+图片尺寸调整工具（纯逻辑模块）
+==============================
 
-# 修改 process_image 函数以接受不同参数
-def process_image(image_path, mode, **kwargs):
+## 文件功能
+提供单图/批量图片的尺寸缩放处理，支持 4 种模式：
+- scale: 按比例缩小原图
+- fixed: 固定宽高
+- fixed_width: 固定宽度，自动计算高度
+- fixed_height: 固定高度，自动计算宽度
+
+## 架构定位
+零 GUI 依赖的纯逻辑模块，被 resize_panel.py（PySide6）调用。
+也支持直接运行测试脚本。
+"""
+
+import os
+# PIL.Image：Pillow 库的图片处理核心类（替换原重复导入）
+from PIL import Image
+
+# ---- 单图处理 ----
+
+
+def process_image(image_path: str, mode: str, **kwargs) -> None:
+    """
+    调整单张图片的尺寸并覆盖保存。
+
+    参数：
+        image_path (str): 图片文件路径
+        mode (str): 处理模式，可选值为 scale/fixed/fixed_width/fixed_height
+        **kwargs: 模式相关参数（scale/width/height）
+
+    说明：
+        - scale=0.7 → 缩小到原图的 70%
+        - fixed=800x600 → 强制设置为指定分辨率
+        - fixed_width=1280 → 宽度固定为 1280，高度按比例
+        - fixed_height=900 → 高度固定为 900，宽度按比例
+    """
     try:
         with Image.open(image_path) as img:
             if mode == "scale":
-                scale = float(kwargs.get('scale', 0.5)) # 默认值以防万一
+                scale = float(kwargs.get('scale', 0.5))
+                # scale=0.7 → 新尺寸 = 原尺寸 × 0.7
                 new_size = (int(img.width * scale), int(img.height * scale))
             elif mode == "fixed":
-                width = int(kwargs.get('width'))
-                height = int(kwargs.get('height'))
+                width, height = int(kwargs.get('width')), int(kwargs.get('height'))
+                # 强制设置为指定分辨率（宽高都不变）
                 new_size = (width, height)
             elif mode == "fixed_width":
-                # 固定宽度，按比例调整高度
                 width = int(kwargs.get('width'))
+                # 固定宽度，高度按比例：新高度 = 原高度 × (目标宽度 / 原宽度)
                 ratio = width / img.width
                 height = int(img.height * ratio)
                 new_size = (width, height)
             elif mode == "fixed_height":
-                # 固定高度，按比例调整宽度
+                # 固定高度，宽度按比例：新宽度 = 原宽度 × (目标高度 / 原高度)
                 height = int(kwargs.get('height'))
                 ratio = height / img.height
                 width = int(img.width * ratio)
