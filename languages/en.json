@@ -351,5 +351,9 @@
   "show_all": "Show All",
   "scan_complete": "Scan complete: {count} subfolders",
   "no_subfolders": "No Train_* subfolders with images found in workspace",
-  "folder_list_btn": "Folder List"
+  "folder_list_btn": "Folder List",
+  "export_cn": "Export CN",
+  "export_en": "Export EN",
+  "export_path_label": "Export to:",
+  "mark_done": "Mark Done"
 }

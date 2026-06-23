@@ -6,6 +6,7 @@ Caption编辑器面板
 """
 
 import os
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -15,10 +16,16 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QTextEdit, QGroupBox,
     QScrollArea, QMessageBox, QFileDialog, QSplitter,
     QListWidget, QListWidgetItem, QCheckBox, QAbstractItemView,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QSlider, QStackedWidget
 )
-from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer, QSize, QObject
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer, QSize, QObject, QUrl
+from PySide6.QtGui import QPixmap, QIcon, QMovie
+try:
+    from PySide6.QtMultimedia import QMediaPlayer
+    from PySide6.QtMultimediaWidgets import QVideoWidget
+except ImportError:
+    QMediaPlayer = None  # type: ignore
+    QVideoWidget = None  # type: ignore
 
 from core.base_panel import BaseToolPanel
 from core.utils import DragDropFolderLineEdit, natural_sort_key
@@ -173,6 +180,9 @@ class CaptionPanel(BaseToolPanel):
         self.current_task_index: int = -1       # 当前在filtered_tasks中的索引
         self.filter_unprocessed: bool = False   # 是否仅显示未处理
         self._folder_dialog: FolderListDialog | None = None  # 文件夹列表子窗口
+        self.export_path: str = ""              # 导出目标路径
+        self._movie: QMovie | None = None      # GIF动画对象
+        self._media_player = None  # 视频播放器 (QMediaPlayer | None)
         self.translator_config: dict = {
             'current_service': 'google',
             'secret_id': '',
@@ -279,6 +289,19 @@ class CaptionPanel(BaseToolPanel):
         top_layout.addWidget(self.load_btn, 0, 3)
         layout.addLayout(top_layout)
 
+        # ---- 第4行：导出路径 ----
+        export_layout = QGridLayout()
+        self.export_label = QLabel()
+        export_layout.addWidget(self.export_label, 0, 0)
+        self.export_entry = QLineEdit()
+        self.export_entry.textChanged.connect(
+            lambda t: setattr(self, 'export_path', t.strip()))
+        export_layout.addWidget(self.export_entry, 0, 1)
+        self.export_browse_btn = QPushButton()
+        self.export_browse_btn.clicked.connect(self._select_export_path)
+        export_layout.addWidget(self.export_browse_btn, 0, 2)
+        layout.addLayout(export_layout)
+
         # ---- 中部：缩略图列表 + 图片预览 + 文本编辑 ----
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -347,15 +370,57 @@ class CaptionPanel(BaseToolPanel):
             "padding: 4px 12px; font-weight: bold; border: none; }"
             "QPushButton:hover { background-color: #138a13; }")
         nav_layout.addWidget(self.save_btn)
+        self.mark_done_btn = QPushButton()
+        self.mark_done_btn.clicked.connect(self._mark_current_done)
+        self.mark_done_btn.setStyleSheet(
+            "QPushButton { background-color: #d48c00; color: white; "
+            "padding: 4px 12px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #e09c10; }")
+        nav_layout.addWidget(self.mark_done_btn)
         center_layout.addLayout(nav_layout)
 
-        # 图片显示
+        # 预览区：静态图片/GIF共用QLabel，视频用QVideoWidget
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.setMinimumSize(350, 280)
+        self.preview_stack.setStyleSheet("background-color: #e8e8e8;")
+
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setMinimumSize(350, 280)
-        self.image_label.setStyleSheet(
-            "background-color: #e8e8e8; border: 1px solid #ccc;")
-        center_layout.addWidget(self.image_label, stretch=1)
+        self.image_label.setStyleSheet("border: 1px solid #ccc;")
+        self.preview_stack.addWidget(self.image_label)  # index 0: 图片/GIF
+
+        # 视频widget（仅多媒体可用时创建）
+        if QVideoWidget is not None:
+            self.video_widget = QVideoWidget()
+            self.video_widget.setStyleSheet("border: 1px solid #ccc;")
+            self.preview_stack.addWidget(self.video_widget)  # index 1: 视频
+        else:
+            self.video_widget = None
+
+        center_layout.addWidget(self.preview_stack, stretch=1)
+
+        # 播放控制栏（默认隐藏，仅GIF/视频时显示）
+        self.playback_bar = QWidget()
+        self.playback_bar.setVisible(False)
+        pb_layout = QHBoxLayout(self.playback_bar)
+        pb_layout.setContentsMargins(0, 0, 0, 0)
+        pb_layout.setSpacing(6)
+
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setFixedWidth(36)
+        self.play_btn.clicked.connect(self._toggle_play)
+        pb_layout.addWidget(self.play_btn)
+
+        self.play_slider = QSlider(Qt.Orientation.Horizontal)
+        self.play_slider.setRange(0, 0)
+        self.play_slider.sliderMoved.connect(self._on_slider_moved)
+        pb_layout.addWidget(self.play_slider, stretch=1)
+
+        self.play_info_label = QLabel("0/0")
+        self.play_info_label.setMinimumWidth(70)
+        self.play_info_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        pb_layout.addWidget(self.play_info_label)
+        center_layout.addWidget(self.playback_bar)
 
         main_splitter.addWidget(center_panel)
 
@@ -405,7 +470,7 @@ class CaptionPanel(BaseToolPanel):
         main_splitter.setStretchFactor(2, 2)
         layout.addWidget(main_splitter, stretch=1)
 
-        # ---- 底部：状态 + 批量操作 ----
+        # ---- 底部：状态 + 批量操作 + 导出 ----
         bottom_layout = QHBoxLayout()
         self.status_label = QLabel()
         self.status_label.setStyleSheet("color: gray;")
@@ -419,6 +484,20 @@ class CaptionPanel(BaseToolPanel):
         self.batch_stop_btn.setVisible(False)
         self.batch_stop_btn.setStyleSheet("color: #c42b1c;")
         bottom_layout.addWidget(self.batch_stop_btn)
+        self.export_cn_btn = QPushButton()
+        self.export_cn_btn.clicked.connect(lambda: self._do_export('cn'))
+        self.export_cn_btn.setStyleSheet(
+            "QPushButton { background-color: #d48c00; color: white; "
+            "padding: 4px 10px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #e09c10; }")
+        bottom_layout.addWidget(self.export_cn_btn)
+        self.export_en_btn = QPushButton()
+        self.export_en_btn.clicked.connect(lambda: self._do_export('en'))
+        self.export_en_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d4; color: white; "
+            "padding: 4px 10px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #1084e0; }")
+        bottom_layout.addWidget(self.export_en_btn)
         self.config_btn = QPushButton()
         self.config_btn.clicked.connect(self._open_config)
         bottom_layout.addWidget(self.config_btn)
@@ -449,13 +528,19 @@ class CaptionPanel(BaseToolPanel):
         self.prev_btn.setText("◀ " + self.tr("prev"))
         self.next_btn.setText(self.tr("next") + " ▶")
         self.save_btn.setText(self.tr("save"))
+        self.mark_done_btn.setText("✓ " + self.tr("mark_done"))
         self.cn_label.setText(self.tr("chinese_caption") + " (name.txt)")
         self.cn_translate_btn.setText(self.tr("translate_cn_to_en"))
         self.en_label.setText(self.tr("english_caption") + " (name_en.txt)")
         self.en_translate_btn.setText(self.tr("translate_en_to_cn"))
         self.batch_translate_btn.setText(self.tr("batch_translate"))
         self.batch_stop_btn.setText(self.tr("stop"))
+        self.export_cn_btn.setText("📤 " + self.tr("export_cn"))
+        self.export_en_btn.setText("📤 " + self.tr("export_en"))
         self.config_btn.setText(self.tr("translator_config"))
+        # 导出行
+        self.export_label.setText(self.tr("export_path_label"))
+        self.export_browse_btn.setText(self.tr("browse"))
 
     # ---------- 工作区管理 ----------
 
@@ -589,6 +674,94 @@ class CaptionPanel(BaseToolPanel):
                     sep='T', timespec='seconds')
                 self._save_task_state()
                 return
+
+    def _check_revert_processed(self, img_path: str):
+        """保存后检查：如果标注文件修改时间晚于标记完成时间，回退为未完成
+
+        参数:
+            img_path: 当前图片路径，用于定位所属文件夹
+        """
+        if not self.tasks:
+            return
+        folder = os.path.dirname(img_path)
+        for task in self.tasks:
+            if task['folder'] != folder:
+                continue
+            processed_time = task.get('processed_time')
+            if not processed_time:
+                return  # 本来就没标记，无需回退
+
+            # 找出该图片关联的标注文件中最新的修改时间
+            base = os.path.splitext(img_path)[0]
+            latest_mtime = 0
+            for suffix in ('_cn.txt', '_en.txt'):
+                txt_path = base + suffix
+                if os.path.exists(txt_path):
+                    mtime = os.path.getmtime(txt_path)
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+
+            if latest_mtime == 0:
+                return
+
+            # 将标注完成时间字符串转为时间戳比较
+            try:
+                processed_ts = datetime.fromisoformat(processed_time).timestamp()
+            except ValueError:
+                return
+
+            if latest_mtime > processed_ts:
+                task['processed_time'] = None
+                self._save_task_state()
+                self.status_label.setText(
+                    f"标注已更新，\"{task['folder_name']}\" 回退为未完成")
+                # 更新筛选按钮文本
+                self._update_filter_btn_text()
+                return
+
+    def _mark_current_done(self):
+        """手动标记当前文件夹为已处理"""
+        if not self.folder_path:
+            QMessageBox.information(self, "提示", "请先加载一个文件夹")
+            return
+        # 检查是否在任务列表中
+        in_tasks = any(t['folder'] == self.folder_path for t in self.tasks)
+        if not in_tasks:
+            QMessageBox.information(self, "提示", "当前文件夹不在工作区任务列表中")
+            return
+        # 检查是否已经标记
+        for task in self.tasks:
+            if task['folder'] == self.folder_path:
+                if task.get('processed_time'):
+                    QMessageBox.information(
+                        self, "提示",
+                        f"该文件夹已于 {task['processed_time']} 标记为已处理")
+                    return
+                break
+        # 标记
+        folder_name = os.path.basename(self.folder_path)
+        reply = QMessageBox.question(
+            self, "确认",
+            f"将 \"{folder_name}\" 标记为已处理?\n\n"
+            f"标记后可在筛选中过滤，不影响数据。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._mark_folder_processed(self.folder_path)
+        self.status_label.setText(f"已标记为完成: {folder_name}")
+        # 如果当前在"仅显示未处理"模式，刷新筛选并跳到下一个
+        if self.filter_unprocessed:
+            current = self.folder_path
+            self._rebuild_filtered_tasks()
+            new_idx = 0
+            for i, t in enumerate(self.filtered_tasks):
+                if t['folder'] == current:
+                    new_idx = i
+                    break
+            if self.filtered_tasks:
+                self._navigate_to_task(new_idx)
+            else:
+                self.status_label.setText("所有文件夹已处理完毕!")
 
     # ---------- 文件夹筛选与导航 ----------
 
@@ -758,9 +931,6 @@ class CaptionPanel(BaseToolPanel):
         self.folder_path = folder
         self.current_index = 0
 
-        # 记录处理状态（仅tasks中的文件夹）
-        self._mark_folder_processed(folder)
-
         # 如果手动加载的文件夹在筛选任务列表中，同步导航索引
         if self.filtered_tasks:
             for i, task in enumerate(self.filtered_tasks):
@@ -883,12 +1053,37 @@ class CaptionPanel(BaseToolPanel):
 
     # ---------- 当前图片显示 ----------
 
+    # 视频/动态文件扩展名
+    VIDEO_EXTS = ('.mp4', '.avi', '.webm', '.mov', '.mkv')
+    GIF_EXTS = ('.gif',)
+
+    def _get_media_type(self, path: str) -> str:
+        """判断文件媒体类型"""
+        low = path.lower()
+        if low.endswith(self.GIF_EXTS):
+            return 'gif'
+        if low.endswith(self.VIDEO_EXTS):
+            return 'video'
+        return 'static'
+
+    def _stop_media(self):
+        """释放当前媒体资源"""
+        if self._movie:
+            self._movie.stop()
+            self._movie = None
+        if self._media_player:
+            self._media_player.stop()
+            self._media_player = None
+        self.image_label.clear()
+
     def _display_current(self):
-        """显示当前索引的图片和标注"""
+        """显示当前索引的图片/动态文件及标注"""
         if not self.caption_pairs:
             self.image_label.setText("无图片")
             self.cn_text.clear()
             self.en_text.clear()
+            self._stop_media()
+            self.playback_bar.setVisible(False)
             return
 
         total = len(self.caption_pairs)
@@ -899,17 +1094,17 @@ class CaptionPanel(BaseToolPanel):
 
         img_path, cn_txt, en_txt = self.caption_pairs[self.current_index]
 
-        # 显示图片
-        pixmap = QPixmap(img_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                max(1, self.image_label.width() - 8),
-                max(1, self.image_label.height() - 8),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            self.image_label.setPixmap(scaled)
+        # 释放上一个媒体
+        self._stop_media()
+
+        media_type = self._get_media_type(img_path)
+
+        if media_type == 'gif':
+            self._display_gif(img_path)
+        elif media_type == 'video':
+            self._display_video(img_path)
         else:
-            self.image_label.setText("无法加载图片")
+            self._display_static(img_path)
 
         # 加载中文标注 (name.txt)
         self.cn_text.clear()
@@ -942,6 +1137,139 @@ class CaptionPanel(BaseToolPanel):
         # 启用/禁用导航按钮
         self.prev_btn.setEnabled(self.current_index > 0)
         self.next_btn.setEnabled(self.current_index < total - 1)
+
+    def _display_static(self, img_path: str):
+        """显示静态图片"""
+        self.preview_stack.setCurrentIndex(0)
+        pixmap = QPixmap(img_path)
+        if not pixmap.isNull():
+            w = max(1, self.image_label.width() - 8)
+            h = max(1, self.image_label.height() - 8)
+            self.image_label.setPixmap(pixmap.scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.image_label.setText("无法加载图片")
+        self.playback_bar.setVisible(False)
+
+    def _display_gif(self, img_path: str):
+        """显示GIF动画"""
+        self.preview_stack.setCurrentIndex(0)
+        self._movie = QMovie(img_path)
+        self._movie.setCacheMode(QMovie.CacheMode.CacheAll)
+        self._movie.setScaledSize(QSize(
+            max(1, self.image_label.width() - 8),
+            max(1, self.image_label.height() - 8)))
+        self.image_label.setMovie(self._movie)
+
+        # 连接帧变化信号
+        self._movie.frameChanged.connect(self._on_gif_frame_changed)
+        self._movie.finished.connect(self._on_gif_finished)
+
+        # 设置控制条
+        total_frames = self._movie.frameCount()
+        self.play_slider.setRange(0, total_frames - 1)
+        self.play_slider.setValue(0)
+        self.play_info_label.setText(f"0/{total_frames}")
+        self.play_btn.setText("⏸")
+        self.playback_bar.setVisible(True)
+
+        self._movie.start()
+
+    def _display_video(self, img_path: str):
+        """显示视频文件"""
+        if QMediaPlayer is None or QVideoWidget is None:
+            self._display_static(img_path)
+            return
+
+        self.preview_stack.setCurrentIndex(1)
+        try:
+            self._media_player = QMediaPlayer()
+            self._media_player.setVideoOutput(self.video_widget)
+            self._media_player.setSource(QUrl.fromLocalFile(img_path))
+
+            self._media_player.positionChanged.connect(self._on_video_position_changed)
+            self._media_player.durationChanged.connect(self._on_video_duration_changed)
+            self._media_player.errorOccurred.connect(self._on_video_error)
+
+            self.play_slider.setRange(0, 0)
+            self.play_slider.setValue(0)
+            self.play_info_label.setText("0:00 / 0:00")
+            self.play_btn.setText("⏸")
+            self.playback_bar.setVisible(True)
+
+            self._media_player.play()
+        except Exception:
+            self.preview_stack.setCurrentIndex(0)
+            self.image_label.setText("无法播放视频")
+            self.playback_bar.setVisible(False)
+
+    # ---------- 播放控制 ----------
+
+    def _toggle_play(self):
+        """播放/暂停切换"""
+        if self._movie:
+            if self._movie.state() == QMovie.MovieState.Running:
+                self._movie.setPaused(True)
+                self.play_btn.setText("▶")
+            else:
+                self._movie.setPaused(False)
+                self.play_btn.setText("⏸")
+        elif self._media_player:
+            if self._media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self._media_player.pause()
+                self.play_btn.setText("▶")
+            else:
+                self._media_player.play()
+                self.play_btn.setText("⏸")
+
+    def _on_slider_moved(self, value: int):
+        """进度条拖动"""
+        if self._movie:
+            self._movie.jumpToFrame(value)
+        elif self._media_player:
+            self._media_player.setPosition(value)
+
+    def _on_gif_frame_changed(self, frame: int):
+        """GIF帧变化 — 更新进度条"""
+        if self._movie:
+            total = self._movie.frameCount()
+            self.play_slider.blockSignals(True)
+            self.play_slider.setValue(frame)
+            self.play_slider.blockSignals(False)
+            self.play_info_label.setText(f"{frame}/{total}")
+
+    def _on_gif_finished(self):
+        """GIF播放完毕"""
+        self.play_btn.setText("▶")
+        if self._movie:
+            self._movie.jumpToFrame(0)
+
+    def _on_video_position_changed(self, pos: int):
+        """视频播放位置变化"""
+        self.play_slider.blockSignals(True)
+        self.play_slider.setValue(pos)
+        self.play_slider.blockSignals(False)
+        dur = self._media_player.duration() if self._media_player else 0
+        self.play_info_label.setText(
+            f"{self._fmt_time(pos)} / {self._fmt_time(dur)}")
+
+    def _on_video_duration_changed(self, dur: int):
+        """视频时长就绪 — 设置进度条范围"""
+        self.play_slider.setRange(0, dur)
+        self.play_info_label.setText(f"0:00 / {self._fmt_time(dur)}")
+
+    def _on_video_error(self):
+        """视频播放出错"""
+        self.preview_stack.setCurrentIndex(0)
+        self.image_label.setText("视频解码失败")
+        self.playback_bar.setVisible(False)
+
+    @staticmethod
+    def _fmt_time(ms: int) -> str:
+        """毫秒 → mm:ss"""
+        s = ms // 1000
+        return f"{s // 60}:{s % 60:02d}"
 
     # ---------- 导航 ----------
 
@@ -981,6 +1309,9 @@ class CaptionPanel(BaseToolPanel):
 
         # 更新pair记录
         self.caption_pairs[self.current_index] = (img_path, cn_path, en_path)
+
+        # 检查是否覆盖了"已完成"状态：保存后文件修改时间 > 标记时间 → 回退为未完成
+        self._check_revert_processed(img_path)
 
         name = os.path.basename(img_path)
         self.status_label.setText(f"已保存: {name}")
@@ -1069,57 +1400,62 @@ class CaptionPanel(BaseToolPanel):
         return service
 
     def _batch_translate(self):
-        """批量翻译TXT：遍历文件夹，将中文.txt翻译为英文_en.txt
+        """批量翻译：遍历工作区所有 Train_* 文件夹，双向补全标注文件
 
         规则:
-        1. 只处理 .txt 文件（非 _en.txt）
-        2. 必须有对应的图片文件（.png/.jpg等）
-        3. 必须不存在对应的 _en.txt 文件
+        1. 遍历 self.tasks 中所有文件夹
+        2. 有 _cn.txt 缺 _en.txt → 中译英，生成 _en.txt
+        3. 有 _en.txt 缺 _cn.txt → 英译中，生成 _cn.txt
+        4. 两个都缺或两个都有 → 跳过
         """
-        folder = self.folder_entry.text().strip()
-        if not folder or not os.path.isdir(folder):
-            # 尝试使用已加载的 caption_pairs
-            if not self.caption_pairs:
-                self.status_label.setText("请先选择文件夹或加载图片")
-                return
-            # 没有文件夹但有已加载数据，使用老逻辑
-            self._save_changes()
-            pairs = self.caption_pairs
-        else:
-            # 递归扫描文件夹及所有子文件夹 — 从txt出发匹配图片
-            self._save_changes()
-            img_exts = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
-            pairs = []
-            for root, _, files in os.walk(folder):
-                for f in sorted(files, key=natural_sort_key):
-                    if not f.endswith('.txt') or f.endswith('_en.txt'):
-                        continue
-                    base = os.path.splitext(f)[0]
-                    txt_path = os.path.join(root, f)
-                    en_path = os.path.join(root, f"{base}_en.txt")
-                    # 检查是否有对应图片（同目录下）
-                    has_image = any(
-                        os.path.exists(os.path.join(root, f"{base}{ext}"))
-                        for ext in img_exts)
-                    if has_image:
-                        pairs.append((os.path.join(root, f"{base}.png"), txt_path, en_path))
+        # 先保存当前编辑
+        self._save_changes()
 
-        if not pairs:
-            self.status_label.setText("没有找到需要翻译的TXT文件")
+        # 收集所有需要翻译的项
+        supported_img = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff')
+        translate_items: list[tuple[str, str, str, str]] = []  # [(img_path, src_txt, dst_txt, direction), ...]
+
+        # 使用工作区任务列表
+        folders = [t['folder'] for t in self.tasks] if self.tasks else []
+        if not folders:
+            self.status_label.setText("请先扫描工作区")
             return
 
-        # 统计待处理
-        pending = sum(1 for _, cn, en in pairs
-                     if os.path.exists(cn) and not os.path.exists(en))
+        for folder in folders:
+            if not os.path.isdir(folder):
+                continue
+            for f in sorted(os.listdir(folder), key=natural_sort_key):
+                if not f.lower().endswith(supported_img):
+                    continue
+                img_path = os.path.join(folder, f)
+                base = os.path.splitext(img_path)[0]
+                cn_txt = base + '_cn.txt'
+                en_txt = base + '_en.txt'
+
+                has_cn = os.path.exists(cn_txt)
+                has_en = os.path.exists(en_txt)
+
+                if has_cn and not has_en:
+                    translate_items.append((img_path, cn_txt, en_txt, 'cn_to_en'))
+                elif has_en and not has_cn:
+                    translate_items.append((img_path, en_txt, cn_txt, 'en_to_cn'))
+                # 两个都缺或两个都有 → 跳过
+
+        pending = len(translate_items)
         if pending == 0:
-            self.status_label.setText("所有英文标注已存在，无需翻译")
+            self.status_label.setText("所有标注文件已完整，无需翻译")
             return
+
+        # 统计各方向数量
+        cn_to_en_count = sum(1 for _, _, _, d in translate_items if d == 'cn_to_en')
+        en_to_cn_count = sum(1 for _, _, _, d in translate_items if d == 'en_to_cn')
 
         reply = QMessageBox.question(
             self, self.tr("pe_confirm_extract_title"),
-            f"批量翻译 {pending} 个中文TXT → 英文_en.txt?\n\n"
-            f"(递归扫描: {folder if folder else '已加载'})\n"
-            f"条件: 有对应图片 + 无_en.txt",
+            f"批量翻译共 {pending} 项，覆盖 {len(folders)} 个文件夹:\n"
+            f"  中→英 (补_en.txt): {cn_to_en_count} 项\n"
+            f"  英→中 (补_cn.txt): {en_to_cn_count} 项\n\n"
+            f"确定开始?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
@@ -1138,28 +1474,27 @@ class CaptionPanel(BaseToolPanel):
             done = 0
             errors = 0
 
-            for i, (img_path, cn_txt, en_txt) in enumerate(pairs):
+            for img_path, src_txt, dst_txt, direction in translate_items:
                 if self._batch_stop:
                     break
-                if os.path.exists(en_txt) or not os.path.exists(cn_txt):
-                    continue
                 try:
-                    with open(cn_txt, 'r', encoding='utf-8') as f:
+                    with open(src_txt, 'r', encoding='utf-8') as f:
                         text = f.read().strip()
                     if not text:
                         continue
-                    result = translator.translate_to_english(text)
-                    with open(en_txt, 'w', encoding='utf-8') as f:
+                    if direction == 'cn_to_en':
+                        result = translator.translate_to_english(text)
+                    else:
+                        result = translator.translate_to_chinese(text)
+                    with open(dst_txt, 'w', encoding='utf-8') as f:
                         f.write(result)
                     done += 1
                     self._translate_progress.emit(
-                        f"批量翻译中... {done}/{pending}  "
-                        f"[{cn_txt}]")
+                        f"批量翻译中... {done}/{pending}  [{os.path.basename(dst_txt)}]")
                 except Exception as e:
                     errors += 1
                     self._translate_progress.emit(
-                        f"批量翻译中... {done}/{pending}  "
-                        f"跳过: {cn_txt} ({e})")
+                        f"批量翻译中... {done}/{pending}  跳过: {os.path.basename(src_txt)} ({e})")
 
             self._batch_mode = False
             if self._batch_stop:
@@ -1172,6 +1507,194 @@ class CaptionPanel(BaseToolPanel):
             QTimer.singleShot(0, self._on_batch_done)
 
         threading.Thread(target=run_batch, daemon=True).start()
+
+    # ---------- 导出 ----------
+
+    def _select_export_path(self):
+        """浏览选择导出目标路径"""
+        folder = self.browse_folder(self.tr("select_folder"))
+        if folder:
+            self.export_entry.setText(folder)
+
+    @staticmethod
+    def _unique_subdir(parent_dir: str, base_name: str) -> str:
+        """生成唯一子文件夹路径，重名时追加编号 (1), (2), ..."""
+        sub_dir = os.path.join(parent_dir, base_name)
+        if not os.path.exists(sub_dir):
+            return sub_dir
+        counter = 1
+        while True:
+            sub_dir = os.path.join(parent_dir, f"{base_name} ({counter})")
+            if not os.path.exists(sub_dir):
+                return sub_dir
+            counter += 1
+
+    @staticmethod
+    def _gif_to_mp4(gif_path: str, mp4_path: str) -> bool:
+        """将GIF转换为可播放的MP4视频（通过ffmpeg）"""
+        try:
+            import subprocess
+            # 先用 ffprobe 获取GIF帧率
+            fps = 10
+            try:
+                probe = subprocess.run([
+                    'ffprobe', '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-show_entries', 'stream=r_frame_rate',
+                    '-of', 'csv=p=0', gif_path,
+                ], capture_output=True, text=True, timeout=10)
+                if probe.returncode == 0 and probe.stdout.strip():
+                    rate_str = probe.stdout.strip()
+                    if '/' in rate_str:
+                        num, den = rate_str.split('/')
+                        if float(den) > 0:
+                            fps = float(num) / float(den)
+                    else:
+                        fps = float(rate_str)
+            except Exception:
+                pass
+
+            # ffmpeg GIF→MP4: 关键参数保证可播放
+            result = subprocess.run([
+                'ffmpeg', '-y',
+                '-i', gif_path,
+                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p',
+                '-r', str(fps),
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '18',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                '-an',
+                mp4_path,
+            ], capture_output=True, timeout=120)
+
+            if result.returncode == 0 and os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+                return True
+
+            # 打印stderr帮助调试
+            if result.stderr:
+                print(f"[ffmpeg stderr] {result.stderr.decode('utf-8', errors='replace')[:500]}")
+        except Exception as e:
+            print(f"[_gif_to_mp4 error] {e}")
+        # 清理残留
+        try:
+            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) == 0:
+                os.remove(mp4_path)
+        except OSError:
+            pass
+        return False
+
+    def _do_export(self, lang: str):
+        """执行导出操作
+
+        参数:
+            lang: 'cn' 导出中文标注, 'en' 导出英文标注
+
+        导出规则:
+        1. 遍历 self.tasks 中所有文件夹
+        2. 找到每张图片及其对应的 _cn.txt / _en.txt
+        3. 在导出路径下创建以图片名命名的子文件夹
+        4. 复制图片 + 对应txt（重命名为 <图片名>.txt）
+        5. 最终每个子文件夹包含2个文件：图片 + txt
+        """
+        export_dir = self.export_entry.text().strip()
+        if not export_dir:
+            QMessageBox.warning(self, "提示", "请先选择导出路径")
+            return
+
+        if not self.tasks:
+            QMessageBox.warning(self, "提示", "请先扫描工作区")
+            return
+
+        # 确定目标txt后缀
+        txt_suffix = '_cn.txt' if lang == 'cn' else '_en.txt'
+        lang_label = '中文' if lang == 'cn' else '英文'
+
+        # 收集所有可导出的项
+        supported_img = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff')
+        export_items: list[tuple[str, str, str]] = []  # [(img_path, txt_path, export_folder_name), ...]
+        skipped = 0
+
+        for task in self.tasks:
+            folder = task['folder']
+            if not os.path.isdir(folder):
+                continue
+            for f in sorted(os.listdir(folder), key=natural_sort_key):
+                if not f.lower().endswith(supported_img):
+                    continue
+                img_path = os.path.join(folder, f)
+                base = os.path.splitext(img_path)[0]
+                txt_path = base + txt_suffix
+                if os.path.exists(txt_path):
+                    img_name = os.path.basename(img_path)
+                    img_base = os.path.splitext(img_name)[0]
+                    export_items.append((img_path, txt_path, img_base))
+                else:
+                    skipped += 1
+
+        if not export_items:
+            QMessageBox.information(
+                self, "提示",
+                f"没有找到可导出的{lang_label}标注文件\n(缺少对应txt的图片: {skipped} 张)")
+            return
+
+        # 确认对话框
+        reply = QMessageBox.question(
+            self, f"确认导出{lang_label}标注",
+            f"将导出 {len(export_items)} 组文件到:\n{export_dir}\n\n"
+            f"每个子文件夹包含: 图片 + {lang_label}标注txt\n"
+            f"缺少对应txt的图片: {skipped} 张 (跳过)\n\n"
+            f"确定继续?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_label.setText(f"正在导出{lang_label}标注...")
+
+        def run_export():
+            done = 0
+            errors = 0
+            os.makedirs(export_dir, exist_ok=True)
+
+            for img_path, txt_path, export_name in export_items:
+                try:
+                    img_ext = os.path.splitext(img_path)[1]
+
+                    # 子文件夹名 = 图片名（重名时自动追加编号）
+                    sub_dir = self._unique_subdir(export_dir, export_name)
+                    os.makedirs(sub_dir, exist_ok=False)
+                    # 去重后的文件夹名即为文件基准名
+                    final_name = os.path.basename(sub_dir)
+
+                    # 处理媒体文件：GIF → MP4，其他直接复制
+                    is_gif = img_path.lower().endswith('.gif')
+                    if is_gif:
+                        dest_media = os.path.join(sub_dir, final_name + '.mp4')
+                        if not self._gif_to_mp4(img_path, dest_media):
+                            # 转换失败则回退为复制原GIF
+                            shutil.copy2(img_path,
+                                         os.path.join(sub_dir, final_name + '.gif'))
+                    else:
+                        dest_media = os.path.join(sub_dir, final_name + img_ext)
+                        shutil.copy2(img_path, dest_media)
+
+                    # 复制txt，重命名为 <去重文件夹名>.txt
+                    dest_txt = os.path.join(sub_dir, final_name + '.txt')
+                    shutil.copy2(txt_path, dest_txt)
+
+                    done += 1
+                except Exception as e:
+                    errors += 1
+
+            if errors > 0:
+                self._translate_progress.emit(
+                    f"导出{lang_label}标注完成: {done} 成功, {errors} 失败")
+            else:
+                self._translate_progress.emit(
+                    f"导出{lang_label}标注完成! 共 {done} 组文件 → {export_dir}")
+
+        threading.Thread(target=run_export, daemon=True).start()
 
     # ---------- 配置 ----------
 

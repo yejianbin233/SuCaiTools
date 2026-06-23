@@ -395,5 +395,9 @@
   "show_all": "显示全部",
   "scan_complete": "扫描完成: {count} 个子文件夹",
   "no_subfolders": "工作区下没有 Train_ 前缀的图片子文件夹",
-  "folder_list_btn": "文件夹列表"
+  "folder_list_btn": "文件夹列表",
+  "export_cn": "中文导出",
+  "export_en": "英文导出",
+  "export_path_label": "导出路径:",
+  "mark_done": "标记已完成"
 }
