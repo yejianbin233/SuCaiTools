@@ -7,13 +7,15 @@ Caption编辑器面板
 
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QGroupBox,
     QScrollArea, QMessageBox, QFileDialog, QSplitter,
-    QListWidget, QListWidgetItem, QCheckBox, QAbstractItemView
+    QListWidget, QListWidgetItem, QCheckBox, QAbstractItemView,
+    QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QThreadPool, Signal, QTimer, QSize, QObject
 from PySide6.QtGui import QPixmap, QIcon
@@ -21,6 +23,132 @@ from PySide6.QtGui import QPixmap, QIcon
 from core.base_panel import BaseToolPanel
 from core.utils import DragDropFolderLineEdit, natural_sort_key
 from core.base_worker import BaseWorker
+
+
+# ---------- 文件夹列表子窗口 ----------
+
+class FolderListDialog(QDialog):
+    """文件夹列表子窗口 — 可滚动显示筛选后的Train_*文件夹
+
+    支持直接点击选择要工作的文件夹，双击或点击确定切换到所选文件夹。
+    """
+
+    folder_selected = Signal(str)  # 发射选中的文件夹路径
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("文件夹列表")
+        self.setMinimumSize(450, 500)
+        self.resize(500, 600)
+        self.setModal(False)  # 非模态，方便持续使用
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        # 顶部信息标签
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("color: gray;")
+        layout.addWidget(self.info_label)
+
+        # 搜索/筛选
+        search_layout = QHBoxLayout()
+        self.search_entry = QLineEdit()
+        self.search_entry.setPlaceholderText("搜索文件夹名...")
+        self.search_entry.textChanged.connect(self._apply_filter)
+        search_layout.addWidget(self.search_entry)
+
+        self.unprocessed_only_cb = QCheckBox("仅显示未处理")
+        self.unprocessed_only_cb.toggled.connect(self._apply_filter)
+        search_layout.addWidget(self.unprocessed_only_cb)
+        layout.addLayout(search_layout)
+
+        # 文件夹列表
+        self.folder_list = QListWidget()
+        self.folder_list.setAlternatingRowColors(True)
+        self.folder_list.itemDoubleClicked.connect(self._on_item_activated)
+        layout.addWidget(self.folder_list, stretch=1)
+
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        self.goto_btn = QPushButton("跳转到选中文件夹")
+        self.goto_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d4; color: white; "
+            "padding: 6px 14px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #1084e0; }")
+        self.goto_btn.clicked.connect(self._on_goto_clicked)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.goto_btn)
+        layout.addLayout(btn_layout)
+
+        # 全量数据（由外部设置）
+        self._all_tasks: list[dict] = []
+
+    def set_tasks(self, tasks: list[dict]):
+        """设置任务列表并刷新显示
+
+        参数:
+            tasks: [{"folder": str, "folder_name": str, "processed_time": str|None}, ...]
+        """
+        self._all_tasks = tasks
+        self._apply_filter()
+
+    def _apply_filter(self):
+        """根据搜索文本和未处理筛选重建列表"""
+        self.folder_list.clear()
+        search_text = self.search_entry.text().strip().lower()
+        unprocessed_only = self.unprocessed_only_cb.isChecked()
+
+        filtered = []
+        for task in self._all_tasks:
+            name = task.get('folder_name', '')
+            processed = task.get('processed_time')
+
+            # 未处理筛选
+            if unprocessed_only and processed:
+                continue
+            # 搜索文本筛选
+            if search_text and search_text not in name.lower():
+                continue
+            filtered.append(task)
+
+        for task in filtered:
+            name = task['folder_name']
+            processed = task.get('processed_time')
+            if processed:
+                display = f"✓ {name}  [{processed}]"
+                tip = f"已处理: {processed}"
+            else:
+                display = f"✗ {name}  (未处理)"
+                tip = "未处理"
+
+            item = QListWidgetItem(display)
+            item.setData(Qt.ItemDataRole.UserRole, task['folder'])
+            item.setToolTip(tip)
+            # 未处理的用粗体
+            if not processed:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            self.folder_list.addItem(item)
+
+        self.info_label.setText(
+            f"共 {len(filtered)} 个文件夹 (总计 {len(self._all_tasks)} 个)")
+
+    def _on_item_activated(self, item: QListWidgetItem):
+        """双击项目 → 选中并关闭"""
+        folder = item.data(Qt.ItemDataRole.UserRole)
+        self.folder_selected.emit(folder)
+        self.accept()
+
+    def _on_goto_clicked(self):
+        """点击跳转按钮"""
+        current = self.folder_list.currentItem()
+        if current:
+            folder = current.data(Qt.ItemDataRole.UserRole)
+            self.folder_selected.emit(folder)
+            self.accept()
+        else:
+            QMessageBox.information(self, "提示", "请先选择一个文件夹")
 
 
 class CaptionPanel(BaseToolPanel):
@@ -37,6 +165,14 @@ class CaptionPanel(BaseToolPanel):
         # caption_pairs: [(图片路径, 中文txt路径, 英文txt路径)]
         self.caption_pairs: list[tuple[str, str, str]] = []
         self.current_index: int = -1
+
+        # 工作区任务状态（基于JSON维护）
+        self.workspace_path: str = ""           # 父文件夹路径
+        self.tasks: list[dict] = []             # [{"folder": str, "folder_name": str, "processed_time": str|None}, ...]
+        self.filtered_tasks: list[dict] = []    # 筛选后的任务列表（与tasks相同对象的子集）
+        self.current_task_index: int = -1       # 当前在filtered_tasks中的索引
+        self.filter_unprocessed: bool = False   # 是否仅显示未处理
+        self._folder_dialog: FolderListDialog | None = None  # 文件夹列表子窗口
         self.translator_config: dict = {
             'current_service': 'google',
             'secret_id': '',
@@ -77,7 +213,53 @@ class CaptionPanel(BaseToolPanel):
         layout = QVBoxLayout(self)
         layout.setSpacing(4)
 
-        # ---- 顶部：文件夹选择 + 加载 ----
+        # ---- 第1行：工作区选择 + 扫描 ----
+        ws_layout = QGridLayout()
+        self.workspace_label = QLabel()
+        ws_layout.addWidget(self.workspace_label, 0, 0)
+        self.workspace_entry = DragDropFolderLineEdit()
+        self.workspace_entry.textChanged.connect(
+            lambda t: setattr(self, 'workspace_path', t.strip()))
+        ws_layout.addWidget(self.workspace_entry, 0, 1)
+        self.workspace_browse_btn = QPushButton()
+        self.workspace_browse_btn.clicked.connect(self._select_workspace)
+        ws_layout.addWidget(self.workspace_browse_btn, 0, 2)
+        self.scan_btn = QPushButton()
+        self.scan_btn.setStyleSheet(
+            "QPushButton { background-color: #0078d4; color: white; "
+            "padding: 6px 14px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: #1084e0; }")
+        self.scan_btn.clicked.connect(self._scan_workspace)
+        ws_layout.addWidget(self.scan_btn, 0, 3)
+        layout.addLayout(ws_layout)
+
+        # ---- 第2行：文件夹导航（上一文件夹/下一文件夹/筛选/列表） ----
+        nav_layout = QHBoxLayout()
+        self.prev_folder_btn = QPushButton()
+        self.prev_folder_btn.setEnabled(False)
+        self.prev_folder_btn.clicked.connect(self._prev_folder)
+        nav_layout.addWidget(self.prev_folder_btn)
+        self.folder_index_label = QLabel("0/0")
+        self.folder_index_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.folder_index_label.setMinimumWidth(80)
+        nav_layout.addWidget(self.folder_index_label)
+        self.next_folder_btn = QPushButton()
+        self.next_folder_btn.setEnabled(False)
+        self.next_folder_btn.clicked.connect(self._next_folder)
+        nav_layout.addWidget(self.next_folder_btn)
+        nav_layout.addSpacing(12)
+        self.filter_toggle_btn = QPushButton()
+        self.filter_toggle_btn.setCheckable(True)
+        self.filter_toggle_btn.setChecked(False)
+        self.filter_toggle_btn.clicked.connect(self._toggle_filter)
+        nav_layout.addWidget(self.filter_toggle_btn)
+        self.folder_list_btn = QPushButton()
+        self.folder_list_btn.clicked.connect(self._open_folder_list)
+        nav_layout.addWidget(self.folder_list_btn)
+        nav_layout.addStretch()
+        layout.addLayout(nav_layout)
+
+        # ---- 第3行：当前文件夹选择 + 加载 ----
         top_layout = QGridLayout()
         self.folder_label = QLabel()
         top_layout.addWidget(self.folder_label, 0, 0)
@@ -90,9 +272,9 @@ class CaptionPanel(BaseToolPanel):
         top_layout.addWidget(self.browse_btn, 0, 2)
         self.load_btn = QPushButton()
         self.load_btn.setStyleSheet(
-            "QPushButton { background-color: #0078d4; color: white; "
+            "QPushButton { background-color: #107c10; color: white; "
             "padding: 6px 14px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background-color: #1084e0; }")
+            "QPushButton:hover { background-color: #138a13; }")
         self.load_btn.clicked.connect(self._load_images)
         top_layout.addWidget(self.load_btn, 0, 3)
         layout.addLayout(top_layout)
@@ -247,6 +429,16 @@ class CaptionPanel(BaseToolPanel):
 
     def retranslate_ui(self):
         """更新UI文本"""
+        # 工作区行
+        self.workspace_label.setText(self.tr("workspace"))
+        self.workspace_browse_btn.setText(self.tr("browse"))
+        self.scan_btn.setText(self.tr("scan"))
+        # 导航行
+        self.prev_folder_btn.setText("◀◀ " + self.tr("prev_folder"))
+        self.next_folder_btn.setText(self.tr("next_folder") + " ▶▶")
+        self._update_filter_btn_text()
+        self.folder_list_btn.setText("📋 " + self.tr("folder_list_btn"))
+        # 当前文件夹行
         self.folder_label.setText(self.tr("select_folder"))
         self.browse_btn.setText(self.tr("browse"))
         self.load_btn.setText(self.tr("load_images"))
@@ -264,6 +456,260 @@ class CaptionPanel(BaseToolPanel):
         self.batch_translate_btn.setText(self.tr("batch_translate"))
         self.batch_stop_btn.setText(self.tr("stop"))
         self.config_btn.setText(self.tr("translator_config"))
+
+    # ---------- 工作区管理 ----------
+
+    def _select_workspace(self):
+        """浏览选择工作区文件夹"""
+        folder = self.browse_folder(self.tr("select_folder"))
+        if folder:
+            self.workspace_entry.setText(folder)
+            # 选择后自动扫描
+            self._scan_workspace()
+
+    def _scan_workspace(self):
+        """递归扫描工作区下所有 Train_ 前缀的子文件夹，构建任务列表并加载JSON状态
+
+        扫描逻辑:
+        1. 递归遍历工作区下所有层级，找出 Train_* 文件夹
+        2. 加载 .caption_tasks.json（如存在），合并已处理状态
+        3. 新的 Train_* 文件夹自动加入任务列表（未处理）
+        4. folder_name 使用相对路径以避免同名冲突
+        """
+        ws = self.workspace_entry.text().strip()
+        if not ws or not os.path.isdir(ws):
+            self.show_error(self.tr("error_title"),
+                            self.tr("pe_error_no_frames"))
+            return
+
+        self.workspace_path = ws
+
+        # 加载已有的任务状态JSON
+        old_tasks = self._load_task_state()
+
+        # 递归扫描所有 Train_* 文件夹（不检查内容，仅按文件夹名前缀匹配）
+        disk_folders: dict[str, str] = {}  # {相对路径名: 绝对路径}
+        try:
+            for root, dirs, _ in os.walk(ws):
+                dirs.sort(key=natural_sort_key)
+                for d in dirs:
+                    if d.startswith('Train_'):
+                        sub_path = os.path.join(root, d)
+                        rel_path = os.path.relpath(sub_path, ws)
+                        disk_folders[rel_path] = sub_path
+        except OSError:
+            self.show_error(self.tr("error_title"),
+                            "无法读取工作区文件夹")
+            return
+
+        # 构建旧任务查找表
+        old_task_map: dict[str, dict] = {
+            t['folder']: t for t in old_tasks
+        }
+
+        # 构建新任务列表（仅包含磁盘上存在的 Train_* 文件夹）
+        self.tasks = []
+        for name, full_path in disk_folders.items():
+            old = old_task_map.get(full_path)
+            self.tasks.append({
+                'folder': full_path,
+                'folder_name': name,
+                'processed_time': old.get('processed_time') if old else None,
+            })
+
+        # 保存任务状态（同步磁盘变化）
+        self._save_task_state()
+
+        # 构建筛选列表
+        self._rebuild_filtered_tasks()
+
+        if not self.filtered_tasks:
+            self.status_label.setText(self.tr("no_subfolders"))
+            self.folder_index_label.setText("0/0")
+            self.prev_folder_btn.setEnabled(False)
+            self.next_folder_btn.setEnabled(False)
+            self.folder_list_btn.setEnabled(False)
+            return
+
+        self.status_label.setText(
+            self.tr("scan_complete").format(count=len(self.filtered_tasks)))
+        self.folder_list_btn.setEnabled(True)
+
+        # 自动加载第一个
+        self._navigate_to_task(0)
+
+    # ---------- 任务状态JSON持久化 ----------
+
+    def _get_task_file_path(self) -> str:
+        """获取任务状态JSON文件路径"""
+        return os.path.join(self.workspace_path, '.caption_tasks.json')
+
+    def _load_task_state(self) -> list[dict]:
+        """从JSON文件加载任务状态"""
+        task_file = self._get_task_file_path()
+        if os.path.exists(task_file):
+            try:
+                import json
+                with open(task_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return data.get('tasks', [])
+            except Exception:
+                return []
+        return []
+
+    def _save_task_state(self):
+        """持久化任务状态到JSON文件"""
+        if not self.workspace_path or not self.tasks:
+            return
+        try:
+            import json
+            task_file = self._get_task_file_path()
+            data = {
+                'workspace': self.workspace_path,
+                'tasks': self.tasks,
+            }
+            with open(task_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.status_label.setText(f"保存任务状态失败: {e}")
+
+    def _mark_folder_processed(self, folder: str):
+        """标记某任务文件夹已处理（记录当前时间）
+
+        只有属于tasks列表中的文件夹才会被标记。
+        已处理过的保留首次处理时间，不覆盖。
+        """
+        if not folder or not self.tasks:
+            return
+        for task in self.tasks:
+            if task['folder'] == folder:
+                if task.get('processed_time'):
+                    return  # 已处理过，保留首次时间
+                task['processed_time'] = datetime.now().isoformat(
+                    sep='T', timespec='seconds')
+                self._save_task_state()
+                return
+
+    # ---------- 文件夹筛选与导航 ----------
+
+    def _rebuild_filtered_tasks(self):
+        """根据filter_unprocessed重建filtered_tasks"""
+        if self.filter_unprocessed:
+            self.filtered_tasks = [
+                t for t in self.tasks
+                if not t.get('processed_time')
+            ]
+        else:
+            self.filtered_tasks = list(self.tasks)
+
+    def _update_folder_nav_ui(self):
+        """更新文件夹导航UI状态"""
+        total = len(self.filtered_tasks)
+        if total == 0:
+            self.folder_index_label.setText("0/0")
+            self.prev_folder_btn.setEnabled(False)
+            self.next_folder_btn.setEnabled(False)
+            return
+        idx = self.current_task_index
+        self.folder_index_label.setText(
+            self.tr("folder_index").format(current=idx + 1, total=total))
+        self.prev_folder_btn.setEnabled(idx > 0)
+        self.next_folder_btn.setEnabled(idx < total - 1)
+
+    def _navigate_to_task(self, index: int):
+        """导航到筛选列表中指定索引的任务并加载"""
+        if index < 0 or index >= len(self.filtered_tasks):
+            return
+        self.current_task_index = index
+        folder = self.filtered_tasks[index]['folder']
+        self.folder_entry.setText(folder)
+        self._update_folder_nav_ui()
+        self._load_images()
+
+    def _prev_folder(self):
+        """导航到上一个文件夹"""
+        if self.current_task_index > 0:
+            self._navigate_to_task(self.current_task_index - 1)
+
+    def _next_folder(self):
+        """导航到下一个文件夹"""
+        if self.current_task_index < len(self.filtered_tasks) - 1:
+            self._navigate_to_task(self.current_task_index + 1)
+
+    def _toggle_filter(self):
+        """切换筛选状态（全部 / 仅显示未处理）"""
+        self.filter_unprocessed = self.filter_toggle_btn.isChecked()
+        self._update_filter_btn_text()
+
+        # 记住当前文件夹路径，用于筛选后定位
+        current_folder = self.folder_path
+
+        self._rebuild_filtered_tasks()
+
+        if not self.filtered_tasks:
+            self.folder_index_label.setText("0/0")
+            self.prev_folder_btn.setEnabled(False)
+            self.next_folder_btn.setEnabled(False)
+            self.status_label.setText(self.tr("no_subfolders"))
+            return
+
+        # 尝试定位到当前文件夹在筛选列表中的位置
+        new_index = 0
+        for i, task in enumerate(self.filtered_tasks):
+            if task['folder'] == current_folder:
+                new_index = i
+                break
+
+        self.status_label.setText(
+            self.tr("scan_complete").format(count=len(self.filtered_tasks)))
+        self._navigate_to_task(new_index)
+
+    def _update_filter_btn_text(self):
+        """更新筛选按钮文本"""
+        if self.filter_unprocessed:
+            self.filter_toggle_btn.setText("📋 " + self.tr("show_all"))
+        else:
+            self.filter_toggle_btn.setText("📋 " + self.tr("filter_unprocessed"))
+
+    # ---------- 文件夹列表子窗口 ----------
+
+    def _open_folder_list(self):
+        """打开文件夹列表子窗口"""
+        if not self.tasks:
+            QMessageBox.information(self, "提示", "请先扫描工作区")
+            return
+
+        # 复用已有对话框，更新数据
+        if self._folder_dialog is None:
+            self._folder_dialog = FolderListDialog(self.window())
+            self._folder_dialog.folder_selected.connect(
+                self._on_folder_dialog_selected)
+            # 同步筛选状态
+            self._folder_dialog.unprocessed_only_cb.setChecked(
+                self.filter_unprocessed)
+
+        self._folder_dialog.set_tasks(self.tasks)
+        self._folder_dialog.show()
+        self._folder_dialog.raise_()
+        self._folder_dialog.activateWindow()
+
+    def _on_folder_dialog_selected(self, folder: str):
+        """子窗口中选择了文件夹 → 导航到该文件夹"""
+        # 在filtered_tasks中查找索引
+        for i, task in enumerate(self.filtered_tasks):
+            if task['folder'] == folder:
+                self._navigate_to_task(i)
+                return
+        # 如果不在筛选列表中（如筛选未处理但选了已处理的），
+        # 临时切换到显示全部，然后导航
+        for i, task in enumerate(self.tasks):
+            if task['folder'] == folder:
+                self.filter_unprocessed = False
+                self.filter_toggle_btn.setChecked(False)
+                self._update_filter_btn_text()
+                self._rebuild_filtered_tasks()
+                self._navigate_to_task(i)
+                return
 
     # ---------- 图片加载 ----------
 
@@ -303,14 +749,25 @@ class CaptionPanel(BaseToolPanel):
         self.caption_pairs = []
         for img_path in image_files:
             base = os.path.splitext(img_path)[0]
-            # 中文: name.txt（与原版一致）
-            cn_txt = base + '.txt'
-            # 英文: name_en.txt（与原版一致）
+            # 中文: name_cn.txt (如 laser_0001#0001.gif → laser_0001#0001_cn.txt)
+            cn_txt = base + '_cn.txt'
+            # 英文: name_en.txt (如 laser_0001#0001.gif → laser_0001#0001_en.txt)
             en_txt = base + '_en.txt'
             self.caption_pairs.append((img_path, cn_txt, en_txt))
 
         self.folder_path = folder
         self.current_index = 0
+
+        # 记录处理状态（仅tasks中的文件夹）
+        self._mark_folder_processed(folder)
+
+        # 如果手动加载的文件夹在筛选任务列表中，同步导航索引
+        if self.filtered_tasks:
+            for i, task in enumerate(self.filtered_tasks):
+                if task['folder'] == folder:
+                    self.current_task_index = i
+                    self._update_folder_nav_ui()
+                    break
 
         # 填充缩略图列表
         self._build_thumbnail_list()
@@ -508,8 +965,8 @@ class CaptionPanel(BaseToolPanel):
         img_path, _, _ = self.caption_pairs[self.current_index]
         base = os.path.splitext(img_path)[0]
 
-        # 保存中文标注到 name.txt
-        cn_path = base + '.txt'
+        # 保存中文标注到 name_cn.txt
+        cn_path = base + '_cn.txt'
         cn_text = self.cn_text.toPlainText().strip()
         if cn_text:
             with open(cn_path, 'w', encoding='utf-8') as f:

@@ -110,5 +110,16 @@
   "rotate_left": "Nach links drehen",
   "rotate_right": "Nach rechts drehen",
   "save_image": "Bild speichern",
-  "tab_image_processor": "Bildbearbeitung"
+  "tab_image_processor": "Bildbearbeitung",
+
+  "workspace": "Arbeitsbereich",
+  "scan": "Scannen",
+  "prev_folder": "Vorheriger Ordner",
+  "next_folder": "Nächster Ordner",
+  "folder_index": "Ordner {current}/{total}",
+  "filter_unprocessed": "Nur unbearbeitete",
+  "show_all": "Alle anzeigen",
+  "scan_complete": "Scan abgeschlossen: {count} Unterordner",
+  "no_subfolders": "Keine Train_* Unterordner mit Bildern gefunden",
+  "folder_list_btn": "Ordnerliste"
 }

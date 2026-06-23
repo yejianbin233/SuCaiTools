@@ -107,5 +107,16 @@
   "rotate_left": "Повернуть влево",
   "rotate_right": "Повернуть вправо",
   "save_image": "Сохранить изображение",
-  "tab_image_processor": "Обработчик изображений"
+  "tab_image_processor": "Обработчик изображений",
+
+  "workspace": "Рабочая область",
+  "scan": "Сканировать",
+  "prev_folder": "Предыдущая папка",
+  "next_folder": "Следующая папка",
+  "folder_index": "Папка {current}/{total}",
+  "filter_unprocessed": "Только необработанные",
+  "show_all": "Показать все",
+  "scan_complete": "Сканирование завершено: {count} подпапок",
+  "no_subfolders": "Подпапки Train_* с изображениями не найдены",
+  "folder_list_btn": "Список папок"
 }

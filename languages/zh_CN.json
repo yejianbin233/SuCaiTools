@@ -384,5 +384,16 @@
   "allm_start_upload": "开始上传",
   "allm_uploading": "上传中...",
   "allm_upload_done": "上传完成",
-  "allm_scan_done": "扫描完成: {count} 个文件"
+  "allm_scan_done": "扫描完成: {count} 个文件",
+
+  "workspace": "工作区",
+  "scan": "扫描",
+  "prev_folder": "上一文件夹",
+  "next_folder": "下一文件夹",
+  "folder_index": "文件夹 {current}/{total}",
+  "filter_unprocessed": "仅显示未处理",
+  "show_all": "显示全部",
+  "scan_complete": "扫描完成: {count} 个子文件夹",
+  "no_subfolders": "工作区下没有 Train_ 前缀的图片子文件夹",
+  "folder_list_btn": "文件夹列表"
 }

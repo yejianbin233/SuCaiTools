@@ -110,5 +110,16 @@
   "rotate_left": "Rotation vers la gauche",
   "rotate_right": "Rotation vers la droite",
   "save_image": "Enregistrer l'image",
-  "tab_image_processor": "Processeur d'images"
+  "tab_image_processor": "Processeur d'images",
+
+  "workspace": "Espace de travail",
+  "scan": "Scanner",
+  "prev_folder": "Dossier précédent",
+  "next_folder": "Dossier suivant",
+  "folder_index": "Dossier {current}/{total}",
+  "filter_unprocessed": "Non traités seulement",
+  "show_all": "Afficher tout",
+  "scan_complete": "Scan terminé: {count} sous-dossiers",
+  "no_subfolders": "Aucun sous-dossier Train_* avec images trouvé",
+  "folder_list_btn": "Liste des dossiers"
 }

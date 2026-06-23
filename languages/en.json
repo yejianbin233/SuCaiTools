@@ -340,5 +340,16 @@
   "allm_start_upload": "Start Upload",
   "allm_uploading": "Uploading...",
   "allm_upload_done": "Upload complete",
-  "allm_scan_done": "Scan complete: {count} files"
+  "allm_scan_done": "Scan complete: {count} files",
+
+  "workspace": "Workspace",
+  "scan": "Scan",
+  "prev_folder": "Prev Folder",
+  "next_folder": "Next Folder",
+  "folder_index": "Folder {current}/{total}",
+  "filter_unprocessed": "Unprocessed Only",
+  "show_all": "Show All",
+  "scan_complete": "Scan complete: {count} subfolders",
+  "no_subfolders": "No Train_* subfolders with images found in workspace",
+  "folder_list_btn": "Folder List"
 }

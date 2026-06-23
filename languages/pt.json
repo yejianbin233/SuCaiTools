@@ -107,5 +107,16 @@
   "rotate_left": "Girar para Esquerda",
   "rotate_right": "Girar para Direita",
   "save_image": "Salvar Imagem",
-  "tab_image_processor": "Processador de Imagem"
+  "tab_image_processor": "Processador de Imagem",
+
+  "workspace": "Área de trabalho",
+  "scan": "Escanear",
+  "prev_folder": "Pasta anterior",
+  "next_folder": "Próxima pasta",
+  "folder_index": "Pasta {current}/{total}",
+  "filter_unprocessed": "Apenas não processados",
+  "show_all": "Mostrar todos",
+  "scan_complete": "Escaneamento concluído: {count} subpastas",
+  "no_subfolders": "Nenhuma subpasta Train_* com imagens encontrada",
+  "folder_list_btn": "Lista de pastas"
 }

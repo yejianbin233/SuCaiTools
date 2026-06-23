@@ -110,5 +110,16 @@
   "rotate_left": "左回転",
   "rotate_right": "右回転",
   "save_image": "画像を保存",
-  "tab_image_processor": "画像処理"
+  "tab_image_processor": "画像処理",
+
+  "workspace": "ワークスペース",
+  "scan": "スキャン",
+  "prev_folder": "前のフォルダ",
+  "next_folder": "次のフォルダ",
+  "folder_index": "フォルダ {current}/{total}",
+  "filter_unprocessed": "未処理のみ",
+  "show_all": "すべて表示",
+  "scan_complete": "スキャン完了: {count} サブフォルダ",
+  "no_subfolders": "Train_* サブフォルダが見つかりません",
+  "folder_list_btn": "フォルダ一覧"
 }
