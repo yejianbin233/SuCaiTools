@@ -354,6 +354,7 @@
   "pivot_edit": "质点(中心对齐)",
   "seg_edit": "分段(网格参考)",
   "enable_split": "启用拆分",
+  "mask_inverse": "反选：剔除遮罩区域(保留其余)",
   "tab_file_distributor": "文件分发",
   "source_file": "源文件:",
   "target_folder": "目标文件夹:",

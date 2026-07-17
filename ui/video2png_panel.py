@@ -76,7 +76,12 @@ class VideoToPngWorker(BaseWorker):
                 if frame_idx % interval == 0:
                     out_path = os.path.join(
                         self.output_dir, f"frame_{saved:05d}.png")
-                    cv2.imwrite(out_path, frame)
+                    # cv2.imwrite 在 Windows 非ASCII路径（如中文）下会静默失败，
+                    # 改用 imencode 内存编码 + numpy.tofile 写盘（支持Unicode路径）
+                    ok, buf = cv2.imencode('.png', frame)
+                    if not ok:
+                        raise RuntimeError(f"第 {frame_idx} 帧PNG编码失败")
+                    buf.tofile(out_path)
                     saved += 1
                     self.signals.progress.emit(saved, expected)
 

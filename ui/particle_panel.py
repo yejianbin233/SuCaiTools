@@ -767,6 +767,10 @@ class ParticlePanel(BaseToolPanel):
         self.split_check.toggled.connect(self._on_split_toggled)
         right_layout.addWidget(self.split_check)
 
+        # 反选模式：剔除遮罩区域（而非提取）
+        self.inverse_check = QCheckBox()
+        right_layout.addWidget(self.inverse_check)
+
         self.delete_mask_btn = QPushButton()
         self.delete_mask_btn.clicked.connect(self._delete_mask)
         self.delete_mask_btn.setMinimumHeight(30)
@@ -864,6 +868,7 @@ class ParticlePanel(BaseToolPanel):
         self.pivot_label.setText(self.tr("pivot_edit"))
         self.seg_label.setText(self.tr("seg_edit"))
         self.split_check.setText(self.tr("enable_split"))
+        self.inverse_check.setText(self.tr("mask_inverse"))
         self.start_btn.setText(self.tr("start_extract"))
         self.stop_btn.setText(self.tr("stop"))
 
@@ -1243,7 +1248,8 @@ class ParticlePanel(BaseToolPanel):
 
         # 创建提取Worker — 将dict转换为MaskDef对象
         from particle_extractor import MaskDef, ParticleExtractor
-        maskdefs = [MaskDef(id=m.get('id',0), label=m.get('label',''), x=m.get('x',0), y=m.get('y',0), width=m.get('width', m.get('w',0)), height=m.get('height', m.get('h',0))) for m in self.image_label.masks]
+        inverse_mode = self.inverse_check.isChecked()
+        maskdefs = [MaskDef(id=m.get('id',0), label=m.get('label',''), x=m.get('x',0), y=m.get('y',0), width=m.get('width', m.get('w',0)), height=m.get('height', m.get('h',0)), inverse=inverse_mode) for m in self.image_label.masks]
 
         class ExtractWorker(BaseWorker):
             def __init__(slf):
@@ -1255,8 +1261,12 @@ class ParticlePanel(BaseToolPanel):
                 try:
                     # 直接对勾选的文件列表应用遮罩（不扫描整个目录）
                     os.makedirs(output_dir, exist_ok=True)
-                    for mask in maskdefs:
-                        os.makedirs(os.path.join(output_dir, mask.label), exist_ok=True)
+                    if inverse_mode:
+                        # 反选模式：所有遮罩合并剔除，输出到单一子目录
+                        os.makedirs(os.path.join(output_dir, 'inverse'), exist_ok=True)
+                    else:
+                        for mask in maskdefs:
+                            os.makedirs(os.path.join(output_dir, mask.label), exist_ok=True)
 
                     for idx, img_path in enumerate(checked_files):
                         if slf._stop_flag:
@@ -1265,44 +1275,78 @@ class ParticlePanel(BaseToolPanel):
                             from PIL import Image
                             filename = os.path.basename(img_path)
                             with Image.open(img_path) as img:
-                                for mi, mask in enumerate(maskdefs):
-                                    # 从原始dict获取split/segment参数
-                                    orig = self.image_label.masks[mi]
-                                    left = max(0, mask.x)
-                                    top = max(0, mask.y)
-                                    right = min(img.width, mask.x + mask.width)
-                                    bottom = min(img.height, mask.y + mask.height)
-                                    if right > left and bottom > top:
-                                        cropped = img.crop((left, top, right, bottom))
+                                # 确保支持透明通道（反选模式需要）
+                                if inverse_mode and img.mode != 'RGBA':
+                                    img = img.convert('RGBA')
+                                elif img.mode == 'P':
+                                    img = img.convert('RGBA')
+                                elif img.mode not in ('RGB', 'RGBA', 'L', 'LA'):
+                                    img = img.convert('RGB')
+
+                                if inverse_mode:
+                                    # 反选模式：合并所有遮罩，一次性剔除全部遮罩区域，每帧只输出一张图片
+                                    from PIL import ImageDraw
+                                    result = img.copy()
+                                    draw = ImageDraw.Draw(result)
+                                    for mask in maskdefs:
+                                        left = max(0, mask.x)
+                                        top = max(0, mask.y)
+                                        right = min(img.width, mask.x + mask.width)
+                                        bottom = min(img.height, mask.y + mask.height)
+                                        if right > left and bottom > top:
+                                            draw.rectangle(
+                                                [left, top, right - 1, bottom - 1],
+                                                fill=(0, 0, 0, 0))  # 透明填充
+                                    # 输出文件名与原图完全一致（含扩展名）
+                                    if os.path.splitext(filename)[1].lower() in ('.jpg', '.jpeg', '.bmp'):
+                                        # 该类格式不支持透明通道，剔除区域转为黑色
+                                        result = result.convert('RGB')
+                                    result.save(os.path.join(
+                                        output_dir, 'inverse', filename))
+                                else:
+                                    for mi, mask in enumerate(maskdefs):
+                                        # 从原始dict获取split/segment参数
+                                        orig = self.image_label.masks[mi]
+                                        left = max(0, mask.x)
+                                        top = max(0, mask.y)
+                                        right = min(img.width, mask.x + mask.width)
+                                        bottom = min(img.height, mask.y + mask.height)
                                         ext = os.path.splitext(img_path)[1]
                                         base_name = os.path.splitext(filename)[0]
-                                        # 拆分模式：按行列拆分为子图
-                                        cols = orig.get('seg_cols', 1)
-                                        rows = orig.get('seg_rows', 1)
-                                        if orig.get('split') and (cols > 1 or rows > 1):
-                                            cw = cropped.width / cols
-                                            rh = cropped.height / rows
-                                            for r in range(rows):
-                                                for c_val in range(cols):
-                                                    x1 = int(c_val * cw)
-                                                    y1 = int(r * rh)
-                                                    x2 = int((c_val + 1) * cw)
-                                                    y2 = int((r + 1) * rh)
-                                                    sub = cropped.crop((x1, y1, x2, y2))
-                                                    sub.save(os.path.join(
-                                                        output_dir, mask.label,
-                                                        f"{base_name}_r{r}c{c_val}{ext}"))
-                                        else:
-                                            out_path = os.path.join(
-                                                output_dir, mask.label,
-                                                base_name + ext)
-                                            cropped.save(out_path)
+
+                                        if right > left and bottom > top:
+                                            cropped = img.crop((left, top, right, bottom))
+                                            # 拆分模式：按行列拆分为子图
+                                            cols = orig.get('seg_cols', 1)
+                                            rows = orig.get('seg_rows', 1)
+                                            if orig.get('split') and (cols > 1 or rows > 1):
+                                                cw = cropped.width / cols
+                                                rh = cropped.height / rows
+                                                for r in range(rows):
+                                                    for c_val in range(cols):
+                                                        x1 = int(c_val * cw)
+                                                        y1 = int(r * rh)
+                                                        x2 = int((c_val + 1) * cw)
+                                                        y2 = int((r + 1) * rh)
+                                                        sub = cropped.crop((x1, y1, x2, y2))
+                                                        sub.save(os.path.join(
+                                                            output_dir, mask.label,
+                                                            f"{base_name}_r{r}c{c_val}{ext}"))
+                                            else:
+                                                out_path = os.path.join(
+                                                    output_dir, mask.label,
+                                                    base_name + ext)
+                                                cropped.save(out_path)
                         except Exception as e:
                             slf.signals.log.emit(f"跳过 {img_path}: {e}")
                         slf.signals.progress.emit(idx + 1, total)
 
-                    slf.signals.log.emit(
-                        f"提取完成! 共处理 {total} 帧 × {len(maskdefs)} 个遮罩")
+                    if inverse_mode:
+                        slf.signals.log.emit(
+                            f"提取完成! 共处理 {total} 帧（已合并 {len(maskdefs)} 个遮罩反选剔除，每帧输出一张）")
+                    else:
+                        slf.signals.log.emit(
+                            f"提取完成! 共处理 {total} 帧 × {len(maskdefs)} 个遮罩")
                     slf.signals.finished.emit({
                         'success': True, 'frame_count': total,
                         'mask_count': len(maskdefs), 'output_dir': output_dir})

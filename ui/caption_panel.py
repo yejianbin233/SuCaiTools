@@ -1529,9 +1529,97 @@ class CaptionPanel(BaseToolPanel):
                 return sub_dir
             counter += 1
 
+    # Wan2.2 VAE 4x时间压缩，原始帧数必须 ≥ 5 才能产生 ≥ 1个latent帧
+    # 游戏资产动画以"动作周期完整"为准，不唯帧数论：
+    #   < 5帧 = 无效（VAE物理上无法处理）
+    #   5-7帧 = 有效但偏低（单循环短动画如快速攻击/受击，有完整动作周期即可）
+    #   ≥ 8帧 = 正常
+    MIN_VIABLE_FRAMES = 5   # 低于此帧数标记为无效
+    LOW_FRAME_WARN = 8      # 低于此帧数给出提醒，但不标记为无效
+
+    @staticmethod
+    def _validate_video(video_path: str) -> dict:
+        """验证视频文件是否可用于训练（通过ffprobe检测帧数、时长、视频流）
+
+        返回:
+            {"valid": bool, "frame_count": int, "duration": float,
+             "fps": float, "error": str, "warning": str}
+            valid=False 表示物理上无法训练（< 5帧、时长为0、无视频流）
+            warning非空 表示可用但帧数偏低，训练时需注意
+        """
+        try:
+            import subprocess
+            import json
+
+            result = subprocess.run([
+                'ffprobe', '-v', 'error',
+                '-select_streams', 'v:0',
+                '-count_frames',
+                '-show_entries', 'stream=nb_read_frames,r_frame_rate,duration',
+                '-show_entries', 'format=duration',
+                '-of', 'json',
+                video_path,
+            ], capture_output=True, text=True, timeout=30)
+
+            if result.returncode != 0:
+                return {"valid": False, "frame_count": 0, "duration": 0.0,
+                        "fps": 0.0, "error": f"ffprobe无法读取: {result.stderr[:200]}",
+                        "warning": ""}
+
+            data = json.loads(result.stdout)
+            streams = data.get('streams', [])
+            if not streams:
+                return {"valid": False, "frame_count": 0, "duration": 0.0,
+                        "fps": 0.0, "error": "无视频流", "warning": ""}
+
+            stream = streams[0]
+
+            # 帧数（-count_frames 可能耗时，优先用直接值）
+            frame_count = int(stream.get('nb_read_frames', 0))
+
+            # 帧率
+            fps = 0.0
+            rate_str = stream.get('r_frame_rate', '0/1')
+            if '/' in rate_str:
+                num, den = rate_str.split('/')
+                if float(den) > 0:
+                    fps = float(num) / float(den)
+
+            # 时长：优先取format级，其次stream级
+            duration = float(data.get('format', {}).get('duration', 0))
+            if duration <= 0:
+                duration = float(stream.get('duration', 0))
+
+            # 无直接帧数时用 duration × fps 估算
+            if frame_count <= 0 and duration > 0 and fps > 0:
+                frame_count = int(duration * fps)
+
+            # 判定
+            if duration <= 0:
+                return {"valid": False, "frame_count": frame_count, "duration": duration,
+                        "fps": fps, "error": "时长为0（元数据缺失或单帧）", "warning": ""}
+            if frame_count < CaptionPanel.MIN_VIABLE_FRAMES:
+                return {"valid": False, "frame_count": frame_count, "duration": duration,
+                        "fps": fps,
+                        "error": f"帧数不足({frame_count}帧，VAE最低需要{CaptionPanel.MIN_VIABLE_FRAMES}帧)",
+                        "warning": ""}
+
+            # 帧数偏低但在可用范围内 — 不阻断，仅提醒
+            warning = ""
+            if frame_count < CaptionPanel.LOW_FRAME_WARN:
+                warning = (f"帧数偏低({frame_count}帧)，但若动作周期完整仍可用于训练，"
+                           f"建议归入短bucket")
+
+            return {"valid": True, "frame_count": frame_count, "duration": duration,
+                    "fps": fps, "error": "", "warning": warning}
+
+        except Exception as e:
+            return {"valid": False, "frame_count": 0, "duration": 0.0,
+                    "fps": 0.0, "error": str(e), "warning": ""}
+
     @staticmethod
     def _gif_to_mp4(gif_path: str, mp4_path: str) -> bool:
-        """将GIF转换为可播放的MP4视频（通过ffmpeg）"""
+        """将GIF转换为可播放的MP4视频（通过ffmpeg），转换后验证有效性"""
         try:
             import subprocess
             # 先用 ffprobe 获取GIF帧率
@@ -1554,27 +1642,42 @@ class CaptionPanel(BaseToolPanel):
             except Exception:
                 pass
 
-            # ffmpeg GIF→MP4: 关键参数保证可播放
+            # ffmpeg GIF→MP4: Wan2.2 VAE 8×空间压缩 → 宽高必须被16整除
+            # neighbor 缩放保留像素画锐利边缘，setsar=1 确保方形像素
             result = subprocess.run([
                 'ffmpeg', '-y',
                 '-i', gif_path,
-                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p',
+                '-vf', ('scale=trunc(iw/16)*16:trunc(ih/16)*16'
+                        ':flags=neighbor,format=yuv420p,setsar=1'),
                 '-r', str(fps),
                 '-c:v', 'libx264',
                 '-preset', 'fast',
                 '-crf', '18',
                 '-pix_fmt', 'yuv420p',
                 '-movflags', '+faststart',
+                '-vsync', 'cfr',
                 '-an',
                 mp4_path,
             ], capture_output=True, timeout=120)
 
-            if result.returncode == 0 and os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
-                return True
+            if result.returncode != 0 or not os.path.exists(mp4_path) or os.path.getsize(mp4_path) <= 0:
+                if result.stderr:
+                    print(f"[ffmpeg stderr] {result.stderr.decode('utf-8', errors='replace')[:500]}")
+                return False
 
-            # 打印stderr帮助调试
-            if result.stderr:
-                print(f"[ffmpeg stderr] {result.stderr.decode('utf-8', errors='replace')[:500]}")
+            # 验证生成的视频是否可用于训练
+            validation = CaptionPanel._validate_video(mp4_path)
+            if not validation['valid']:
+                print(f"[视频验证失败] {os.path.basename(gif_path)} → {validation['error']}")
+                # 删除无效视频，返回False触发回退
+                try:
+                    os.remove(mp4_path)
+                except OSError:
+                    pass
+                return False
+
+            return True
+
         except Exception as e:
             print(f"[_gif_to_mp4 error] {e}")
         # 清理残留
@@ -1652,10 +1755,16 @@ class CaptionPanel(BaseToolPanel):
 
         self.status_label.setText(f"正在导出{lang_label}标注...")
 
+        # 需要验证的视频扩展名（GIF转换后或已有的视频文件）
+        VIDEO_EXTS = ('.mp4', '.avi', '.webm', '.mov', '.mkv')
+
         def run_export():
             done = 0
             errors = 0
+            cleaned_items: list[dict] = []   # 已清理的无效项 [{name, reason}]
+            warn_videos: list[str] = []      # 可用但帧数偏低（5-7帧）
             os.makedirs(export_dir, exist_ok=True)
+            sub_dir = ""  # 外层作用域，供except块清理
 
             for img_path, txt_path, export_name in export_items:
                 try:
@@ -1667,32 +1776,120 @@ class CaptionPanel(BaseToolPanel):
                     # 去重后的文件夹名即为文件基准名
                     final_name = os.path.basename(sub_dir)
 
-                    # 处理媒体文件：GIF → MP4，其他直接复制
                     is_gif = img_path.lower().endswith('.gif')
+                    is_video_src = img_ext.lower() in VIDEO_EXTS
+                    skip_this = False
+                    clean_reason = ""
+
                     if is_gif:
-                        dest_media = os.path.join(sub_dir, final_name + '.mp4')
-                        if not self._gif_to_mp4(img_path, dest_media):
-                            # 转换失败则回退为复制原GIF
-                            shutil.copy2(img_path,
-                                         os.path.join(sub_dir, final_name + '.gif'))
-                    else:
+                        # 先验证源GIF是否可用于训练
+                        gif_val = self._validate_video(img_path)
+                        if not gif_val['valid']:
+                            clean_reason = f"源GIF无效 — {gif_val['error']}"
+                            skip_this = True
+                        else:
+                            dest_media = os.path.join(sub_dir, final_name + '.mp4')
+                            if self._gif_to_mp4(img_path, dest_media):
+                                pass  # 转换+验证成功
+                            else:
+                                clean_reason = "GIF转MP4失败（ffmpeg错误），源文件正常"
+                                skip_this = True
+                    elif is_video_src:
                         dest_media = os.path.join(sub_dir, final_name + img_ext)
                         shutil.copy2(img_path, dest_media)
+                        validation = self._validate_video(dest_media)
+                        if not validation['valid']:
+                            clean_reason = validation['error']
+                            skip_this = True
+                        elif validation.get('warning'):
+                            warn_videos.append(
+                                f"{final_name}{img_ext} | {validation['frame_count']}帧 | {validation['warning']}")
+                    else:
+                        # 静态图片，无需验证
+                        shutil.copy2(img_path,
+                                     os.path.join(sub_dir, final_name + img_ext))
+
+                    if skip_this:
+                        shutil.rmtree(sub_dir)
+                        cleaned_items.append({
+                            'name': export_name,
+                            'source': os.path.basename(img_path),
+                            'reason': clean_reason,
+                        })
+                        sub_dir = ""
+                        continue
 
                     # 复制txt，重命名为 <去重文件夹名>.txt
                     dest_txt = os.path.join(sub_dir, final_name + '.txt')
                     shutil.copy2(txt_path, dest_txt)
 
                     done += 1
+                    sub_dir = ""
                 except Exception as e:
                     errors += 1
+                    if sub_dir and os.path.exists(sub_dir):
+                        try:
+                            shutil.rmtree(sub_dir)
+                        except Exception:
+                            pass
 
+            # ---- 写入日志文件 ----
+            log_path = os.path.join(export_dir, '_export_log.txt')
+            try:
+                from datetime import datetime
+                lines = [
+                    f"导出日志 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"标注语言: {lang_label}",
+                    f"导出路径: {export_dir}",
+                    f"",
+                    f"=== 统计 ===",
+                    f"成功导出: {done} 组",
+                    f"导出失败: {errors} 组",
+                    f"已清理无效: {len(cleaned_items)} 组",
+                    f"帧数偏低(可用): {len(warn_videos)} 组",
+                ]
+                if cleaned_items:
+                    lines.append("")
+                    lines.append("=== 已清理的无效文件（未导出）===")
+                    for item in cleaned_items:
+                        lines.append(
+                            f"  [{item['name']}] {item['source']} — {item['reason']}")
+                if warn_videos:
+                    lines.append("")
+                    lines.append("=== 帧数偏低提醒（已导出，训练时建议归入短bucket）===")
+                    for w in warn_videos:
+                        lines.append(f"  {w}")
+                lines.append("")
+                with open(log_path, 'w', encoding='utf-8') as lf:
+                    lf.write('\n'.join(lines))
+            except Exception:
+                pass  # 日志写入失败不影响导出
+
+            # ---- 弹窗汇总 ----
+            parts = [f"导出{lang_label}标注完成: {done} 成功"]
             if errors > 0:
-                self._translate_progress.emit(
-                    f"导出{lang_label}标注完成: {done} 成功, {errors} 失败")
-            else:
-                self._translate_progress.emit(
-                    f"导出{lang_label}标注完成! 共 {done} 组文件 → {export_dir}")
+                parts.append(f"{errors} 失败")
+            if cleaned_items:
+                parts.append(f"{len(cleaned_items)} 已清理")
+            msg = "，".join(parts)
+
+            if cleaned_items:
+                msg += f"\n\n❌ 已清理 {len(cleaned_items)} 个无效视频及标注:\n"
+                shown = cleaned_items[:10]
+                msg += "\n".join(
+                    f"  • {c['source']} — {c['reason']}" for c in shown)
+                if len(cleaned_items) > 10:
+                    msg += f"\n  ... 及其他 {len(cleaned_items) - 10} 个"
+
+            if warn_videos:
+                msg += f"\n\n⚠ 帧数偏低 {len(warn_videos)} 个（已导出，建议归入短bucket）:\n"
+                shown = warn_videos[:5]
+                msg += "\n".join(f"  • {w.split(' | ')[0]}" for w in shown)
+                if len(warn_videos) > 5:
+                    msg += f"\n  ... 及其他 {len(warn_videos) - 5} 个"
+
+            msg += f"\n\n📄 详细日志: {log_path}"
+            self._translate_progress.emit(msg)
 
         threading.Thread(target=run_export, daemon=True).start()
 

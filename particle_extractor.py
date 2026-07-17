@@ -21,6 +21,7 @@ class MaskDef:
     y: int           # 左上角Y
     width: int       # 宽度（像素）
     height: int      # 高度（像素）
+    inverse: bool = False  # True=剔除遮罩区域, False=提取遮罩区域
 
 
 class ParticleExtractor:
