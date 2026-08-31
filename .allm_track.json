@@ -102,32 +102,42 @@
   "caption/caption_editor_frame_gui.py": {
     "size": 32009,
     "mtime": 1780449458.094323,
-    "name": "custom-documents/caption_editor_frame_gui.py-02c1bbb8-cdbe-46b6-a59f-c083e4fa6251.json"
+    "name": "custom-documents/caption_editor_frame_gui.py-78fff549-7e34-4bb4-b867-d13022d5b747.json"
   },
   "caption/config_dialog.py": {
     "size": 19045,
     "mtime": 1780629895.0975778,
-    "name": "custom-documents/config_dialog.py-6979c7e6-d5eb-43fd-930c-9a4126e762a8.json"
+    "name": "custom-documents/config_dialog.py-a82c3ec2-a277-4248-801c-d362717d13d2.json"
+  },
+  "caption/delete.txt": {
+    "size": 28,
+    "mtime": 1781574416.1361935,
+    "name": "custom-documents/delete.txt-49411ebf-3cbd-4337-8185-c9211f36dc8e.json"
   },
   "caption/GifWindow.py": {
     "size": 11998,
     "mtime": 1780629889.1962323,
-    "name": "custom-documents/GifWindow.py-9d107a85-a722-4a37-bcef-30c46cc1ef47.json"
+    "name": "custom-documents/GifWindow.py-ae754a47-e1bf-4f42-b8c8-896978bdbfec.json"
   },
   "caption/RestoreWindow.py": {
     "size": 7699,
     "mtime": 1780629891.4653745,
-    "name": "custom-documents/RestoreWindow.py-7178a9c8-122a-4942-b262-7441529d4a0a.json"
+    "name": "custom-documents/RestoreWindow.py-72e23025-e5df-408f-bb86-c210a3c33fd4.json"
   },
   "caption/ThumbnailWindow.py": {
     "size": 12944,
     "mtime": 1780629893.4625387,
-    "name": "custom-documents/ThumbnailWindow.py-4c95e203-7445-452c-836f-cfe664c1ca56.json"
+    "name": "custom-documents/ThumbnailWindow.py-9bb46d51-4570-4d7d-a534-9e88297e4882.json"
   },
   "caption/translator_manager.py": {
     "size": 18355,
     "mtime": 1780632301.201239,
-    "name": "custom-documents/translator_manager.py-605bb986-8b3d-4005-b92f-481d6b44aa1d.json"
+    "name": "custom-documents/translator_manager.py-bdec4b21-19e9-429f-9e53-c52a60916d6c.json"
+  },
+  "caption/测试同步推送.txt": {
+    "size": 15,
+    "mtime": 1781412651.1655223,
+    "name": "custom-documents/.txt-deb24c16-bb88-498f-a1a2-8d53a566ddd9.json"
   },
   "core/base_panel.py": {
     "size": 5161,
@@ -190,8 +200,8 @@
     "mtime": 1764661123.6223137
   },
   "ui/anythingllm_upload_panel.py": {
-    "size": 62017,
-    "mtime": 1781539061.547057
+    "size": 61514,
+    "mtime": 1781575654.2405689
   },
   "ui/caption_panel.py": {
     "size": 29208,

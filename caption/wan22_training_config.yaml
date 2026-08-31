@@ -1,0 +1,50 @@
+# ============================================================
+# Wan2.2 1.3B LoRA 训练推荐配置 — 像素游戏资产
+# 基于: 300+ 视频, 512×512, 2D像素画特效
+# ============================================================
+
+# ---------- 学习率（最关键）----------
+learning_rate: 1e-4          # 之前可能设太高了，从1e-4起步最稳
+lr_text_encoder: 5e-5        # text encoder 用更低 LR，或直接冻结
+lr_scheduler: "cosine"       # cosine 比 constant 收敛更稳
+lr_warmup_steps: 100         # ★ 必须有 warmup，防止早期loss爆炸
+min_lr: 1e-6                 # cosine 最终衰减到的底线
+
+# ---------- LoRA 结构 ----------
+rank: 32                     # 300视频用rank=32，不要省
+alpha: 32                    # alpha=rank 或 rank/2，32是安全值
+target_modules: "all"        # 像素画风格强 → 全模块注入
+# 如果VRAM不够，退到: "q,k,v,o,ff"
+
+# ---------- 训练规模 ----------
+batch_size: 2                # 保持你的设置
+gradient_accumulation: 4     # ★ 新增 — 等效batch=8，loss曲线更平滑
+max_train_steps: 1200        # 300视频 × batch2 × acc4 = 8 epoch
+# 如果时间紧，至少跑 750 step (= 5 epoch)
+
+# ---------- 优化器 ----------
+optimizer: "adamw"
+weight_decay: 0.01
+betas: [0.9, 0.999]
+epsilon: 1e-8
+
+# ---------- 精度 ----------
+mixed_precision: "bf16"      # Wan2.2用bf16，不要用fp16
+# fp16容易在VAE encode阶段溢出导致loss NaN
+
+# ---------- 采样（★ 之前缺失的）----------
+sample_every_n_steps: 200    # 每200步采样一次，看生成效果
+sample_seeds: [42, 123, 888] # 固定seed，方便对比不同step的效果
+sample_prompts:
+  - "红色粒子分裂，像素画风格，2D游戏资产"
+  - "火焰爆炸特效，像素画风格，橙红黄渐变"
+  - "蓝色骑士挥砍攻击，像素画Q版风格"
+
+# ---------- 保存 ----------
+save_every_n_steps: 400      # 每400步存一个checkpoint
+save_total_limit: 3          # 只保留最近3个，省磁盘
+
+# ---------- 其他 ----------
+num_workers: 4               # DataLoader进程数
+prefetch_factor: 2           # 预取数据
+seed: 42                     # 固定随机种子，保证可复现

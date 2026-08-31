@@ -31,6 +31,7 @@ from ui.image_processor_panel import ImageProcessorPanel
 from ui.jpg_to_png_panel import JpgToPngPanel
 from ui.rotate_panel import RotatePanel
 from ui.particle_panel import ParticlePanel
+from ui.pixelizer_panel import PixelizerPanel
 from ui.caption_panel import CaptionPanel
 from ui.gif_maker_panel import GifMakerPanel
 from ui.file_distributor_panel import FileDistributorPanel
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         (ImageProcessorPanel,  "tab_image_processor",     "图片处理"),
         (JpgToPngPanel,        "tab_jpg_to_png",          "JPG转PNG"),
         (RotatePanel,          "tab_image_rotator",       "图片旋转"),
+        (PixelizerPanel,       "tab_pixelizer",           "图片转像素"),
         (ParticlePanel,        "tab_particle_extractor",  "粒子提取器"),
         (CaptionPanel,         "tab_caption_editor",      "Caption编辑器"),
         (GifMakerPanel,        "tab_gif_maker",           "GIF合成"),
